@@ -8,7 +8,7 @@ local SESSION = ac.getSession(0)
 
 local app = {
 	title = "Sectors Practice v"..appVersion,
-	settings_path = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturnReturn\\_settings.json",
+        settings_path = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\_settings.json",
 	font = ui.DWriteFont("Roboto:/assets/fonts/Roboto-Medium.ttf;Weight=Regular"),
 	delta = 0,
 	uiDecay = 110, -- Espacio horizontal entre columnas de sectores
