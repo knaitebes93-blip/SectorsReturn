@@ -668,18 +668,9 @@ function script.update(dt)
         app.liveSector = app.currentSector
         app.liveStartClock = nil
     else
-        -- Fallback al reloj local si el reloj del juego no aporta tiempo de sector
-        local sectorChanged = app.lastFrameSector ~= nil and app.currentSector ~= app.lastFrameSector
-        if sectorChanged then
-            app.liveStartClock = now
-            app.liveSector = app.currentSector
-            app.currentSectorTimer = 0
-        elseif app.liveStartClock ~= nil then
-            app.currentSectorTimer = now - app.liveStartClock
-        else
-            app.currentSectorTimer = 0
-            app.liveSector = nil
-        end
+        app.currentSectorTimer = 0
+        app.liveSector = nil
+        app.liveStartClock = nil
     end
 
     app.lastFrameSector = app.currentSector
@@ -701,9 +692,9 @@ function script.update(dt)
             local prevSectorMs = CAR.previousSectorTime or 0
             if app.prevSectorTime ~= prevSectorMs then
                 -- Reiniciar timer live al cruzar cualquier línea de sector
-                app.liveStartClock = now
-                app.liveSector = ((CAR.currentSector + 1) <= appData.sector_count) and (CAR.currentSector + 1) or 1
                 app.currentSectorTimer = 0
+                app.liveStartClock = nil
+                app.liveSector = nil
                 -- AC referencia splits desde 0, tablas Lua desde 1
                 app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or prevSectorMs
                 if appData.sectorsdata.best[CAR.currentSector+1] == nil then
