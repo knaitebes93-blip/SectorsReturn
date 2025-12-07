@@ -656,26 +656,29 @@ function script.update(dt)
     --    checkSectorChangeAndCapture()
     --end
 
-    -- Timer en vivo del sector actual:
-    -- solo corre después de cruzar al menos una línea de sector
+    -- Timer en vivo del sector actual basado en el reloj del juego cuando esté disponible
+    local currentSectorTimeMs = CAR.currentSectorTime or 0
     if teleportActive then
         app.currentSectorTimer = 0
         app.liveStartClock = nil
         app.liveSector = nil
         app.prevSectorTime = CAR.previousSectorTime
-    elseif app.liveStartClock ~= nil then
-        app.currentSectorTimer = now - app.liveStartClock
+    elseif currentSectorTimeMs > 0 then
+        app.currentSectorTimer = currentSectorTimeMs / 1000
+        app.liveSector = app.currentSector
+        app.liveStartClock = nil
     else
-        app.currentSectorTimer = 0
-    end
-
-    if not teleportActive then
-        local lastSector = app.lastFrameSector
-        local currentSector = app.currentSector
-        if lastSector ~= nil and currentSector ~= nil and currentSector ~= lastSector then
+        -- Fallback al reloj local si el reloj del juego no aporta tiempo de sector
+        local sectorChanged = app.lastFrameSector ~= nil and app.currentSector ~= app.lastFrameSector
+        if sectorChanged then
             app.liveStartClock = now
-            app.liveSector = currentSector
+            app.liveSector = app.currentSector
             app.currentSectorTimer = 0
+        elseif app.liveStartClock ~= nil then
+            app.currentSectorTimer = now - app.liveStartClock
+        else
+            app.currentSectorTimer = 0
+            app.liveSector = nil
         end
     end
 
