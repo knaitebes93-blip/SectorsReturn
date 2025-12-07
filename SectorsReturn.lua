@@ -14,11 +14,14 @@ local app = {
 	uiDecay = 110, -- Espacio horizontal entre columnas de sectores
 	prevSectorTime = 0,
 	currentSector = 1,
-	allowedTyresOut = SIM.allowedTyresOut,
-	isOnline = CAR.sessionID ~= -1 and true or false,
-	currentSectorTimer = 0,
-	currentSectorStartClock = nil,
-	lastSectorForTimer = nil,
+        allowedTyresOut = SIM.allowedTyresOut,
+        isOnline = CAR.sessionID ~= -1 and true or false,
+        currentSectorTimer = 0,
+        currentSectorStartClock = nil,
+        lastSectorForTimer = nil,
+        liveStartClock = nil,
+        liveSector = nil,
+        teleportCooldownUntil = nil,
 	colors = {
 		RED			= rgbm(1, 0.15, 0, 1),
 		ORANGE		= rgbm(1, 0.55, 0, 1),
@@ -233,7 +236,10 @@ app.init = function()
 
     app.currentSectorStartClock = nil
     app.currentSectorTimer = 0
-    app.lastSectorForTimer = nil
+    app.lastSectorForTimer = app.getCurrentSector()
+    app.liveStartClock = nil
+    app.liveSector = nil
+    app.teleportCooldownUntil = nil
 
 end
 
@@ -306,6 +312,8 @@ app.teleportToSector = function(sectorIndex)
 
         -- Resetear timer live al teletransportar: no debe correr hasta cruzar la próxima línea de sector
         app.currentSectorStartClock = nil
+        app.liveStartClock = nil
+        app.liveSector = nil
         app.currentSectorTimer = 0
 
         -- Sincronizar el último sector conocido con el sector al que nos teletransportamos
@@ -320,6 +328,7 @@ app.teleportToSector = function(sectorIndex)
 
         ac.setMessage("Modo Práctica", "Sector " .. sectorIndex .. " Reiniciado")
         app.teleporting = true
+        app.teleportCooldownUntil = os.preciseClock() + 1.0
         -- Pequeña pausa para evitar guardar estado mientras te teletransportas
         setTimeout(function() app.teleporting = false end, 1.0)
     end
@@ -448,31 +457,31 @@ function script.main(dt)
 	-- === Fila Live (tiempo en vivo del sector + delta) ===
 	ui.offsetCursorX(-10)
 	ui.offsetCursorY(-3)
-	ui.dwriteText("Live", tSize)
+        ui.dwriteText("Live", tSize)
 
-	for i = 1, appData.sector_count do
-		ui.sameLine(i * app.uiDecay - 70, 0)
+        for i = 1, appData.sector_count do
+                ui.sameLine(i * app.uiDecay - 70, 0)
 
-		local timeNow = (i == app.currentSector) and app.currentSectorTimer or 0
-		ui.dwriteText(app.time_to_string(timeNow), tSize, app.colors.CYAN)
+                local timeNow = (i == app.liveSector) and app.currentSectorTimer or 0
+                ui.dwriteText(app.time_to_string(timeNow), tSize, app.colors.CYAN)
 
-		-- Delta respecto al BEST del sector
-		ui.sameLine(i * app.uiDecay - 17, 0)
+                -- Delta respecto al BEST del sector
+                ui.sameLine(i * app.uiDecay - 17, 0)
 
-		local best = appData.sectorsdata.best[i] or 0
-		local deltaColor = app.colors.GREY
-		local deltaText = "inv"
+                local best = appData.sectorsdata.best[i] or 0
+                local deltaColor = app.colors.GREY
+                local deltaText = "inv"
 
-		if timeNow > 0 and best > 0 then
-			local delta = timeNow - best
-			if delta <= 0 then
-				deltaColor = app.colors.GREEN
-			end
-			deltaText = string.format("%.3fs", delta)
-		end
+                if timeNow > 0 and best > 0 then
+                        local delta = timeNow - best
+                        if delta <= 0 then
+                                deltaColor = app.colors.GREEN
+                        end
+                        deltaText = string.format("%+.3fs", delta)
+                end
 
-		ui.dwriteText(deltaText, tSize - 1, deltaColor)
-	end
+                ui.dwriteText(deltaText, tSize - 1, deltaColor)
+        end
 	-- Fila Current (Last)
 	ui.offsetCursorX(-10)
 	ui.offsetCursorY(-3)
@@ -633,8 +642,14 @@ local function checkSectorChangeAndCapture()
 end
 
 function script.update(dt)
-	isOutside()
-	app.currentSector = app.getCurrentSector()
+        isOutside()
+        app.currentSector = app.getCurrentSector()
+
+    local now = os.preciseClock()
+    local teleportActive = app.teleporting or (app.teleportCooldownUntil ~= nil and now < app.teleportCooldownUntil)
+    if app.teleportCooldownUntil ~= nil and now >= app.teleportCooldownUntil then
+        app.teleportCooldownUntil = nil
+    end
 
     -- Capturar estado si cambiamos de sector (deshabilitado por ahora)
     --if not app.teleporting and not SIM.isReplayActive then
@@ -643,11 +658,28 @@ function script.update(dt)
 
     -- Timer en vivo del sector actual:
     -- solo corre después de cruzar al menos una línea de sector
-    if app.currentSectorStartClock ~= nil then
-        app.currentSectorTimer = os.preciseClock() - app.currentSectorStartClock
+    if teleportActive then
+        app.currentSectorTimer = 0
+        app.liveStartClock = nil
+        app.liveSector = nil
+        app.prevSectorTime = CAR.previousSectorTime
+    elseif app.liveStartClock ~= nil then
+        app.currentSectorTimer = now - app.liveStartClock
     else
         app.currentSectorTimer = 0
     end
+
+    if not teleportActive then
+        local lastSector = app.lastFrameSector
+        local currentSector = app.currentSector
+        if lastSector ~= nil and currentSector ~= nil and currentSector ~= lastSector then
+            app.liveStartClock = now
+            app.liveSector = currentSector
+            app.currentSectorTimer = 0
+        end
+    end
+
+    app.lastFrameSector = app.currentSector
 
 	if CAR.isInPit then
 		for i in ipairs(appData.sectorsValid) do appData.sectorsValid[i] = true end
@@ -660,14 +692,15 @@ function script.update(dt)
 
 	mSectorsStep(app.currentSector)
 
-	-- Actualización de tiempos de sector y best (basado en app original),
+        -- Actualización de tiempos de sector y best (basado en app original),
     -- ignorando cambios provocados por teleports
-	if not app.teleporting and app.prevSectorTime ~= CAR.previousSectorTime then
-		-- Reiniciar timer live al cruzar cualquier línea de sector
-		app.currentSectorStartClock = os.preciseClock()
-		-- AC referencia splits desde 0, tablas Lua desde 1
-		app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or CAR.previousSectorTime
-		if appData.sectorsdata.best[CAR.currentSector+1] == nil then
+        if not teleportActive and app.prevSectorTime ~= CAR.previousSectorTime then
+                -- Reiniciar timer live al cruzar cualquier línea de sector
+                app.liveStartClock = now
+                app.liveSector = ((CAR.currentSector + 1) <= appData.sector_count) and (CAR.currentSector + 1) or 1
+                -- AC referencia splits desde 0, tablas Lua desde 1
+                app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or CAR.previousSectorTime
+                if appData.sectorsdata.best[CAR.currentSector+1] == nil then
 			appData.sectorsdata.best[CAR.currentSector+1] = 0
 		end
 
