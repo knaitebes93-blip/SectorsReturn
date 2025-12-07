@@ -495,14 +495,14 @@ function script.main(dt)
 		end
 
 		color = app.colors.GREY
-		if appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 then
-			app.delta = 'inv'
-			hasLast = false
-		else
-			app.delta = appData.current_sectors[i] - appData.sectorsdata.best[i]
-			if app.delta <= 0 then color = app.colors.GREEN end
-			if app.delta > 80 then app.delta = 'inv' else app.delta = string.format("%.3fs", app.delta) end
-		end
+                if appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 or appData.sectorsdata.best[i] == nil or appData.sectorsdata.best[i] == 0 then
+                        app.delta = 'inv'
+                        hasLast = false
+                else
+                        app.delta = appData.current_sectors[i] - appData.sectorsdata.best[i]
+                        if app.delta <= 0 then color = app.colors.GREEN end
+                        if app.delta > 80 then app.delta = 'inv' else app.delta = string.format("%.3fs", app.delta) end
+                end
 		ui.sameLine(i*app.uiDecay - 17, 0)
 		ui.dwriteText(app.delta, tSize-1, color)
 		lSum = lSum + appData.current_sectors[i]
@@ -656,26 +656,29 @@ function script.update(dt)
     --    checkSectorChangeAndCapture()
     --end
 
-    -- Timer en vivo del sector actual:
-    -- solo corre después de cruzar al menos una línea de sector
+    -- Timer en vivo del sector actual basado en el reloj del juego
+    local currentSectorTimeMs = CAR.currentSectorTime or 0
     if teleportActive then
         app.currentSectorTimer = 0
         app.liveStartClock = nil
         app.liveSector = nil
         app.prevSectorTime = CAR.previousSectorTime
-    elseif app.liveStartClock ~= nil then
-        app.currentSectorTimer = now - app.liveStartClock
+    elseif currentSectorTimeMs > 0 then
+        app.currentSectorTimer = currentSectorTimeMs / 1000
+        app.liveSector = app.currentSector
+        app.liveStartClock = nil
     else
-        app.currentSectorTimer = 0
-    end
-
-    if not teleportActive then
-        local lastSector = app.lastFrameSector
-        local currentSector = app.currentSector
-        if lastSector ~= nil and currentSector ~= nil and currentSector ~= lastSector then
+        -- Fallback al reloj local si el reloj del juego no aporta tiempo de sector
+        local sectorChanged = app.lastFrameSector ~= nil and app.currentSector ~= app.lastFrameSector
+        if sectorChanged then
             app.liveStartClock = now
-            app.liveSector = currentSector
+            app.liveSector = app.currentSector
             app.currentSectorTimer = 0
+        elseif app.liveStartClock ~= nil then
+            app.currentSectorTimer = now - app.liveStartClock
+        else
+            app.currentSectorTimer = 0
+            app.liveSector = nil
         end
     end
 
@@ -694,45 +697,48 @@ function script.update(dt)
 
         -- Actualización de tiempos de sector y best (basado en app original),
     -- ignorando cambios provocados por teleports
-        if not teleportActive and app.prevSectorTime ~= CAR.previousSectorTime then
+        if not teleportActive then
+            local prevSectorMs = CAR.previousSectorTime or 0
+            if app.prevSectorTime ~= prevSectorMs then
                 -- Reiniciar timer live al cruzar cualquier línea de sector
                 app.liveStartClock = now
                 app.liveSector = ((CAR.currentSector + 1) <= appData.sector_count) and (CAR.currentSector + 1) or 1
+                app.currentSectorTimer = 0
                 -- AC referencia splits desde 0, tablas Lua desde 1
-                app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or CAR.previousSectorTime
+                app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or prevSectorMs
                 if appData.sectorsdata.best[CAR.currentSector+1] == nil then
-			appData.sectorsdata.best[CAR.currentSector+1] = 0
-		end
+                        appData.sectorsdata.best[CAR.currentSector+1] = 0
+                end
 
-		-- Vuelta nueva: actualizar último sector
-		if CAR.currentSector == 0 then
-			app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or app.prevSectorTime
-			app.prevSectorTime = app.prevSectorTime / 1000
-			if app.prevSectorTime ~= appData.current_sectors[appData.sector_count] then
-				appData.current_sectors[appData.sector_count] = app.prevSectorTime
-			end
-			if app.currentSectorValid then
-				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
-					or appData.sectorsdata.best[appData.sector_count] == 0 then
-					app.sNotif = "S" .. appData.sector_count .. " " ..
-						string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
-					appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
-					app.saveCarData()
-				end
-			end
-		else
-			app.prevSectorTime = CAR.previousSectorTime / 1000
-			appData.current_sectors[CAR.currentSector] = app.prevSectorTime
-			if app.currentSectorValid then
-				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
-					or appData.sectorsdata.best[CAR.currentSector] == 0 then
-					app.sNotif = "S" .. CAR.currentSector .. " " ..
-						string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
-					appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
-					app.saveCarData()
-				end
-			end
-		end
+                -- Vuelta nueva: actualizar último sector
+                if CAR.currentSector == 0 then
+                        local lastSplitMs = CAR.lastSplits[appData.sector_count-1]
+                        local sectorSeconds = (lastSplitMs or app.prevSectorTime or 0) / 1000
+                        if sectorSeconds ~= appData.current_sectors[appData.sector_count] then
+                                appData.current_sectors[appData.sector_count] = sectorSeconds
+                        end
+                        if app.currentSectorValid then
+                                if sectorSeconds ~= 0 and sectorSeconds < appData.sectorsdata.best[appData.sector_count]
+                                        or appData.sectorsdata.best[appData.sector_count] == 0 then
+                                        app.sNotif = "S" .. appData.sector_count .. " " ..
+                                                string.format("%.3fs", sectorSeconds - appData.sectorsdata.best[appData.sector_count])
+                                        appData.sectorsdata.best[appData.sector_count] = sectorSeconds
+                                        app.saveCarData()
+                                end
+                        end
+                else
+                        local sectorSeconds = (prevSectorMs or 0) / 1000
+                        appData.current_sectors[CAR.currentSector] = sectorSeconds
+                        if app.currentSectorValid then
+                                if sectorSeconds ~= 0 and sectorSeconds < appData.sectorsdata.best[CAR.currentSector]
+                                        or appData.sectorsdata.best[CAR.currentSector] == 0 then
+                                        app.sNotif = "S" .. CAR.currentSector .. " " ..
+                                                string.format("%.3fs", sectorSeconds - appData.sectorsdata.best[CAR.currentSector])
+                                        appData.sectorsdata.best[CAR.currentSector] = sectorSeconds
+                                        app.saveCarData()
+                                end
+                        end
+                end
 
 		-- Personal best de vuelta (record tipo CM)
 		if CAR.isLastLapValid and CAR.previousLapTimeMs ~= 0 then
@@ -752,9 +758,10 @@ function script.update(dt)
             end
         end
 
-		app.prevSectorTime = CAR.previousSectorTime
-		app.currentSectorValid = true
-	end
+                app.prevSectorTime = prevSectorMs
+                app.currentSectorValid = true
+            end
+        end
 end
 ac.onSessionStart(function(sessionIndex, restarted)
 	if restarted then app.init() end
