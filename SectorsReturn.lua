@@ -8,7 +8,7 @@ local SESSION = ac.getSession(0)
 
 local app = {
 	title = "Sectors Practice v"..appVersion,
-	settings_path = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturnReturn\\_settings.json",
+        settings_path = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\_settings.json",
 	font = ui.DWriteFont("Roboto:/assets/fonts/Roboto-Medium.ttf;Weight=Regular"),
 	delta = 0,
 	uiDecay = 110, -- Espacio horizontal entre columnas de sectores
@@ -688,46 +688,48 @@ function script.update(dt)
 
         -- Actualización de tiempos de sector y best (basado en app original),
     -- ignorando cambios provocados por teleports
-        if not teleportActive and app.prevSectorTime ~= CAR.previousSectorTime then
+        if not teleportActive then
+            local prevSectorMs = CAR.previousSectorTime or 0
+            if app.prevSectorTime ~= prevSectorMs then
                 -- Reiniciar timer live al cruzar cualquier línea de sector
                 app.currentSectorTimer = 0
                 app.liveStartClock = nil
                 app.liveSector = nil
                 -- AC referencia splits desde 0, tablas Lua desde 1
-                app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or CAR.previousSectorTime
+                app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or prevSectorMs
                 if appData.sectorsdata.best[CAR.currentSector+1] == nil then
-			appData.sectorsdata.best[CAR.currentSector+1] = 0
-		end
+                        appData.sectorsdata.best[CAR.currentSector+1] = 0
+                end
 
-		-- Vuelta nueva: actualizar último sector
-		if CAR.currentSector == 0 then
-			app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or app.prevSectorTime
-			app.prevSectorTime = app.prevSectorTime / 1000
-			if app.prevSectorTime ~= appData.current_sectors[appData.sector_count] then
-				appData.current_sectors[appData.sector_count] = app.prevSectorTime
-			end
-			if app.currentSectorValid then
-				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
-					or appData.sectorsdata.best[appData.sector_count] == 0 then
-					app.sNotif = "S" .. appData.sector_count .. " " ..
-						string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
-					appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
-					app.saveCarData()
-				end
-			end
-		else
-			app.prevSectorTime = CAR.previousSectorTime / 1000
-			appData.current_sectors[CAR.currentSector] = app.prevSectorTime
-			if app.currentSectorValid then
-				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
-					or appData.sectorsdata.best[CAR.currentSector] == 0 then
-					app.sNotif = "S" .. CAR.currentSector .. " " ..
-						string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
-					appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
-					app.saveCarData()
-				end
-			end
-		end
+                -- Vuelta nueva: actualizar último sector
+                if CAR.currentSector == 0 then
+                        local lastSplitMs = CAR.lastSplits[appData.sector_count-1]
+                        local sectorSeconds = (lastSplitMs or app.prevSectorTime or 0) / 1000
+                        if sectorSeconds ~= appData.current_sectors[appData.sector_count] then
+                                appData.current_sectors[appData.sector_count] = sectorSeconds
+                        end
+                        if app.currentSectorValid then
+                                if sectorSeconds ~= 0 and sectorSeconds < appData.sectorsdata.best[appData.sector_count]
+                                        or appData.sectorsdata.best[appData.sector_count] == 0 then
+                                        app.sNotif = "S" .. appData.sector_count .. " " ..
+                                                string.format("%.3fs", sectorSeconds - appData.sectorsdata.best[appData.sector_count])
+                                        appData.sectorsdata.best[appData.sector_count] = sectorSeconds
+                                        app.saveCarData()
+                                end
+                        end
+                else
+                        local sectorSeconds = (prevSectorMs or 0) / 1000
+                        appData.current_sectors[CAR.currentSector] = sectorSeconds
+                        if app.currentSectorValid then
+                                if sectorSeconds ~= 0 and sectorSeconds < appData.sectorsdata.best[CAR.currentSector]
+                                        or appData.sectorsdata.best[CAR.currentSector] == 0 then
+                                        app.sNotif = "S" .. CAR.currentSector .. " " ..
+                                                string.format("%.3fs", sectorSeconds - appData.sectorsdata.best[CAR.currentSector])
+                                        appData.sectorsdata.best[CAR.currentSector] = sectorSeconds
+                                        app.saveCarData()
+                                end
+                        end
+                end
 
 		-- Personal best de vuelta (record tipo CM)
 		if CAR.isLastLapValid and CAR.previousLapTimeMs ~= 0 then
@@ -747,9 +749,10 @@ function script.update(dt)
             end
         end
 
-		app.prevSectorTime = CAR.previousSectorTime
-		app.currentSectorValid = true
-	end
+                app.prevSectorTime = prevSectorMs
+                app.currentSectorValid = true
+            end
+        end
 end
 ac.onSessionStart(function(sessionIndex, restarted)
 	if restarted then app.init() end
