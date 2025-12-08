@@ -5,6 +5,7 @@ local SIM = ac.getSim()
 local CAR = ac.getCar(0)
 local TRACK = ac.getTrackID()
 local SESSION = ac.getSession(0)
+local SectorRecord = require('SectorRecord')
 
 local returnButton = ac.ControlButton('__APP_SECTORSPRACTICE_RETURN')
 local saveReturnButton = ac.ControlButton('__APP_SECTORSPRACTICE_SAVE')
@@ -38,13 +39,16 @@ local app = {
 		CYAN        = rgbm(0, 1, 1, 1)
 	},
 	userData = {
-		data = {},
-		settings = {
-			savepb = false,
-			allowedTyresOut = 3,
-		},
-	},
-	sNotif = '',
+                data = {},
+                settings = {
+                        savepb = false,
+                        allowedTyresOut = 3,
+                        showGhost = false,
+                },
+        },
+        ghostSectors = {},
+        ghostColor = rgbm(0.8, 0.4, 1, 0.7),
+        sNotif = '',
     -- Variables para Dynamic Return
     sectorStates = {},
     returnStates = {},
@@ -236,6 +240,7 @@ app.init = function()
     app.returnStates = {}
     app.lastReturnSector = 1
     app.loadSectorStates()   -- NUEVO: cargar states guardados para este auto+pista
+    app.loadSectorGhosts()
 
     app.sessionLastLapMs = 0
     app.sessionBestLapMs = 0
@@ -270,6 +275,90 @@ app.loadSectorStates = function(carId)
             local ok, content = pcall(io.load, filePath)
             if ok and content then
                 app.sectorStates[i] = content
+            end
+        end
+    end
+end
+
+local function getGhostDir()
+    return string.format("%s\\%s_%s", ac.getFolder(ac.FolderID.ScriptConfig), ac.getTrackFullID('_'), ac.getCarID())
+end
+
+local function getSectorIndexForProgress(progress)
+    if progress == nil then return nil end
+    for i = 1, appData.sector_count do
+        local startPos = appData.sectors[i]
+        local endPos = appData.sectors[i + 1] or 1
+        local p = progress
+        if endPos < startPos then
+            if p < startPos then p = p + 1 end
+            endPos = endPos + 1
+        end
+        if p >= startPos and p <= endPos then
+            return i
+        end
+    end
+    return nil
+end
+
+local function parseMeasureEntry(entry)
+    if type(entry) ~= 'table' then return nil end
+    local pos = entry[1] or entry.pos or entry.spline or entry.progress
+    local time = entry[2] or entry.time
+    if pos == nil or time == nil then return nil end
+    return {pos = pos, time = time}
+end
+
+local function buildInterpolatedGhost(measure)
+    local cleaned = {}
+    for _, v in ipairs(measure) do
+        local parsed = parseMeasureEntry(v)
+        if parsed then cleaned[#cleaned + 1] = parsed end
+    end
+    table.sort(cleaned, function(a, b) return a.time < b.time end)
+    if #cleaned < 2 then return {} end
+
+    local points = {}
+    local stepMs = 50
+    local totalTime = cleaned[#cleaned].time
+    local idx = 1
+    for t = 0, totalTime, stepMs do
+        while idx < #cleaned and cleaned[idx + 1].time < t do
+            idx = idx + 1
+        end
+        local a = cleaned[idx]
+        local b = cleaned[math.min(idx + 1, #cleaned)]
+        local span = b.time - a.time
+        if span <= 0 then span = 1 end
+        local k = (t - a.time) / span
+        if k < 0 then k = 0 end
+        if k > 1 then k = 1 end
+        local pos = a.pos + (b.pos - a.pos) * k
+        local worldPos = ac.trackProgressToWorldCoordinate(pos % 1)
+        points[#points + 1] = worldPos
+    end
+
+    points[#points + 1] = ac.trackProgressToWorldCoordinate(cleaned[#cleaned].pos % 1)
+    return points
+end
+
+app.loadSectorGhosts = function()
+    app.ghostSectors = {}
+    local dir = getGhostDir()
+    local files = io.scanDir(dir, '*.lon')
+    if not files then return end
+
+    for _, file in ipairs(files) do
+        local record = SectorRecord(dir .. '/' .. file)
+        if record then
+            local measure = record.measure or (record.data and record.data.measure)
+            local finishingPoint = record.finishingPoint or (record.data and record.data.finishingPoint)
+            local sectorIndex = getSectorIndexForProgress(finishingPoint)
+            if sectorIndex and measure then
+                local ghostPoints = buildInterpolatedGhost(measure)
+                if #ghostPoints > 1 then
+                    app.ghostSectors[sectorIndex] = ghostPoints
+                end
             end
         end
     end
@@ -475,17 +564,21 @@ function windowMainSettings(dt)
 			appData.sectorsdata.target[i] = v
 			app.saveCarData()
 		end
-	end
-	ui.separator()
-	ui.dwriteText('Session:', 12)
-	ui.sameLine(80)
-	ui.dwriteText(app.isOnline and 'Online' or 'Offline', 12)
+        end
+        ui.separator()
+        ui.dwriteText('Session:', 12)
+        ui.sameLine(80)
+        ui.dwriteText(app.isOnline and 'Online' or 'Offline', 12)
+        if ui.checkbox('Show Sector Ghost', app.userData.settings.showGhost) then
+                app.userData.settings.showGhost = not app.userData.settings.showGhost
+                app.saveSettings(false)
+        end
     -- ... (resto de settings igual) ...
     if ui.checkbox('Force save CM personnal best', app.userData.settings.savepb) then
-		app.userData.settings.savepb = not app.userData.settings.savepb
-		if app.userData.settings.savepb then app.savePersonalBest(appData.pb) end
-		app.saveSettings(false)
-	end
+                app.userData.settings.savepb = not app.userData.settings.savepb
+                if app.userData.settings.savepb then app.savePersonalBest(appData.pb) end
+                app.saveSettings(false)
+        end
 end
 
 -- Función principal de dibujado
@@ -833,8 +926,23 @@ function script.update(dt)
                 app.currentSectorValid = true
         end
 end
+
+render.on('main.track.transparent', function ()
+        if not app.userData.settings.showGhost then return end
+
+        local ghost = app.ghostSectors[app.currentSector]
+        if not ghost or #ghost < 2 then return end
+
+        render.setBlendMode(render.BlendMode.AlphaBlend)
+        render.setCullMode(render.CullMode.None)
+        render.setDepthMode(render.DepthMode.ReadOnly)
+
+        for i = 1, #ghost - 1 do
+                render.debugLine(ghost[i], ghost[i + 1], app.ghostColor, app.ghostColor)
+        end
+end)
 ac.onSessionStart(function(sessionIndex, restarted)
-	if restarted then app.init() end
+        if restarted then app.init() end
 end)
 
 app.init()
