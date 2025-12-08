@@ -8,7 +8,7 @@ local SESSION = ac.getSession(0)
 
 local app = {
 	title = "Sectors Practice v"..appVersion,
-	settings_path = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturnReturn\\_settings.json",
+	settings_path = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\_settings.json",
 	font = ui.DWriteFont("Roboto:/assets/fonts/Roboto-Medium.ttf;Weight=Regular"),
 	delta = 0,
 	uiDecay = 110, -- Espacio horizontal entre columnas de sectores
@@ -22,7 +22,7 @@ local app = {
         liveStartClock = nil,
         liveSector = nil,
         teleportCooldownUntil = nil,
-	colors = {
+        colors = {
 		RED			= rgbm(1, 0.15, 0, 1),
 		ORANGE		= rgbm(1, 0.55, 0, 1),
 		WHITE		= rgbm(1, 1, 1, 1),
@@ -171,9 +171,9 @@ app.checkOldSettings = function()
 end
 
 app.saveSettings = function(async)
-	async = async or false
-	local jsonSettings = JSON.stringify(app.userData.settings, {pretty=true})
-	if async then io.saveAsync(app.settings_path, jsonSettings) else io.save(app.settings_path, jsonSettings) end
+        async = async or false
+        local jsonSettings = JSON.stringify(app.userData.settings, {pretty=true})
+        if async then io.saveAsync(app.settings_path, jsonSettings) else io.save(app.settings_path, jsonSettings) end
 end
 
 app.loadSettings = function()
@@ -339,9 +339,9 @@ end
 
 --- Dibuja las barras de micro-sectores y AHORA TAMBIÉN LOS BOTONES
 local function drawmSectors(dt)
-	local mSectorWidth = app.uiDecay / 8
-	local basey = 104
-	local basex = 35
+        local mSectorWidth = app.uiDecay / 8
+        local basey = 104
+        local basex = 35
 	
     -- Línea gris superior
     ui.drawSimpleLine(vec2(basex, basey-9), vec2(basex, basey+9), app.colors.GREY, 1)
@@ -410,12 +410,33 @@ local function drawmSectors(dt)
                 ui.setTooltip("Punto de retorno no guardado aún.\nPasa por este sector para activarlo.")
             end
         end
-		
-		ui.popID()
-	end
+
+                ui.popID()
+        end
 
     -- Línea inferior
-	ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
+        ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
+end
+
+local function idealSectorTimeAtCurrentPos(sectorIndex)
+        local startPos = appData.sectors[sectorIndex]
+        local endPos = appData.sectors[sectorIndex + 1] or 1
+        if not startPos or not endPos then return nil end
+
+        local spl = CAR.splinePosition
+        local length = endPos - startPos
+        if math.abs(length) < 1e-6 then
+                return nil
+        end
+
+        local t = (spl - startPos) / length
+        if t < 0 then t = 0 end
+        if t > 1 then t = 1 end
+
+        local bestSectorTime = appData.sectorsdata.best[sectorIndex]
+        if not bestSectorTime or bestSectorTime <= 0 then return nil end
+
+        return bestSectorTime * t
 end
 
 
@@ -468,24 +489,24 @@ function script.main(dt)
                 -- Delta respecto al BEST del sector
                 ui.sameLine(i * app.uiDecay - 17, 0)
 
-                local best = appData.sectorsdata.best[i] or 0
                 local deltaColor = app.colors.GREY
                 local deltaText = "inv"
 
-                if timeNow > 0 and best > 0 then
-                        local delta = timeNow - best
-                        if delta <= 0 then
-                                deltaColor = app.colors.GREEN
+                if i == app.liveSector and timeNow > 0 then
+                        local ideal = idealSectorTimeAtCurrentPos(i)
+                        if ideal ~= nil then
+                                local delta = timeNow - ideal
+                                deltaColor = (delta <= 0) and app.colors.GREEN or app.colors.RED
+                                deltaText = string.format("%+.3fs", delta)
                         end
-                        deltaText = string.format("%+.3fs", delta)
                 end
 
                 ui.dwriteText(deltaText, tSize - 1, deltaColor)
         end
-	-- Fila Current (Last)
-	ui.offsetCursorX(-10)
-	ui.offsetCursorY(-3)
-	ui.dwriteText("Last", tSize)
+        -- Fila Current (Last)
+        ui.offsetCursorX(-10)
+        ui.offsetCursorY(-3)
+        ui.dwriteText("Last", tSize)
 	for i=1, appData.sector_count do
 		ui.sameLine(i*app.uiDecay - 70, 0)
 		if app.currentSector == i then
@@ -494,19 +515,19 @@ function script.main(dt)
 			ui.dwriteText(app.time_to_string(appData.current_sectors[i]), tSize)
 		end
 
-		color = app.colors.GREY
-		if appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 then
-			app.delta = 'inv'
-			hasLast = false
-		else
-			app.delta = appData.current_sectors[i] - appData.sectorsdata.best[i]
-			if app.delta <= 0 then color = app.colors.GREEN end
-			if app.delta > 80 then app.delta = 'inv' else app.delta = string.format("%.3fs", app.delta) end
-		end
-		ui.sameLine(i*app.uiDecay - 17, 0)
-		ui.dwriteText(app.delta, tSize-1, color)
-		lSum = lSum + appData.current_sectors[i]
-	end
+                color = app.colors.GREY
+                if appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 or appData.sectorsdata.best[i] == nil or appData.sectorsdata.best[i] == 0 then
+                        app.delta = 'inv'
+                        hasLast = false
+                else
+                        app.delta = appData.current_sectors[i] - appData.sectorsdata.best[i]
+                        color = app.delta <= 0 and app.colors.GREEN or app.colors.RED
+                        app.delta = string.format("%+.3fs", app.delta)
+                end
+                ui.sameLine(i*app.uiDecay - 17, 0)
+                ui.dwriteText(app.delta, tSize-1, color)
+                lSum = lSum + appData.current_sectors[i]
+        end
 
 	-- Fila Best
 	ui.offsetCursorX(-10)
@@ -752,9 +773,9 @@ function script.update(dt)
             end
         end
 
-		app.prevSectorTime = CAR.previousSectorTime
-		app.currentSectorValid = true
-	end
+                app.prevSectorTime = CAR.previousSectorTime
+                app.currentSectorValid = true
+        end
 end
 ac.onSessionStart(function(sessionIndex, restarted)
 	if restarted then app.init() end
