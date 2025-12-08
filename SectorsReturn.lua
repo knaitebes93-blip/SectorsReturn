@@ -22,7 +22,15 @@ local app = {
         liveStartClock = nil,
         liveSector = nil,
         teleportCooldownUntil = nil,
-	colors = {
+        lapStartClock = nil,
+        lapPosShift = 0,
+        lastLapSpline = nil,
+        liveLapTrace = {},
+        lastLapTrace = nil,
+        bestLapTrace = nil,
+        bestLapTimeMs = nil,
+        currentLapCountRef = nil,
+        colors = {
 		RED			= rgbm(1, 0.15, 0, 1),
 		ORANGE		= rgbm(1, 0.55, 0, 1),
 		WHITE		= rgbm(1, 1, 1, 1),
@@ -240,6 +248,14 @@ app.init = function()
     app.liveStartClock = nil
     app.liveSector = nil
     app.teleportCooldownUntil = nil
+    app.lapStartClock = nil
+    app.lapPosShift = 0
+    app.lastLapSpline = nil
+    app.liveLapTrace = {}
+    app.lastLapTrace = nil
+    app.bestLapTrace = nil
+    app.bestLapTimeMs = nil
+    app.currentLapCountRef = CAR.lapCount
 
 end
 
@@ -339,9 +355,9 @@ end
 
 --- Dibuja las barras de micro-sectores y AHORA TAMBIÉN LOS BOTONES
 local function drawmSectors(dt)
-	local mSectorWidth = app.uiDecay / 8
-	local basey = 104
-	local basex = 35
+        local mSectorWidth = app.uiDecay / 8
+        local basey = 104
+        local basex = 35
 	
     -- Línea gris superior
     ui.drawSimpleLine(vec2(basex, basey-9), vec2(basex, basey+9), app.colors.GREY, 1)
@@ -410,12 +426,49 @@ local function drawmSectors(dt)
                 ui.setTooltip("Punto de retorno no guardado aún.\nPasa por este sector para activarlo.")
             end
         end
-		
-		ui.popID()
-	end
+
+                ui.popID()
+        end
 
     -- Línea inferior
-	ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
+        ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
+end
+
+local function lapTraceTimeAtPos(trace, pos)
+        if trace == nil or #trace == 0 then return nil end
+
+        local prev = trace[1]
+        if pos <= prev.pos then return prev.time end
+
+        for i = 2, #trace do
+                local curr = trace[i]
+                if pos <= curr.pos then
+                        local span = curr.pos - prev.pos
+                        if span > 1e-6 then
+                                local factor = (pos - prev.pos) / span
+                                return prev.time + factor * (curr.time - prev.time)
+                        end
+                        return curr.time
+                end
+                prev = curr
+        end
+
+        return trace[#trace].time
+end
+
+local function liveDeltaForCurrentPosition(sectorIndex, liveSectorTime)
+        if app.bestLapTrace == nil or app.lapStartClock == nil then return nil end
+
+        local currentPos = CAR.splinePosition + app.lapPosShift
+        local sectorStartPos = appData.sectors[sectorIndex] or 0
+
+        local bestCurrent = lapTraceTimeAtPos(app.bestLapTrace, currentPos)
+        local bestAtStart = lapTraceTimeAtPos(app.bestLapTrace, sectorStartPos)
+
+        if bestCurrent == nil or bestAtStart == nil then return nil end
+
+        local bestRelative = (bestCurrent - bestAtStart) / 1000
+        return liveSectorTime - bestRelative
 end
 
 
@@ -472,7 +525,11 @@ function script.main(dt)
                 local deltaColor = app.colors.GREY
                 local deltaText = "inv"
 
-                if timeNow > 0 and best > 0 then
+                local liveDelta = (i == app.liveSector) and liveDeltaForCurrentPosition(i, timeNow) or nil
+                if liveDelta ~= nil then
+                        deltaColor = liveDelta <= 0 and app.colors.GREEN or app.colors.RED
+                        deltaText = string.format("%+.3fs", liveDelta)
+                elseif timeNow > 0 and best > 0 then
                         local delta = timeNow - best
                         deltaColor = delta <= 0 and app.colors.GREEN or app.colors.RED
                         deltaText = string.format("%+.3fs", delta)
@@ -649,6 +706,39 @@ function script.update(dt)
         app.teleportCooldownUntil = nil
     end
 
+    if teleportActive then
+        app.lapStartClock = nil
+        app.liveLapTrace = {}
+        app.lastLapSpline = nil
+    else
+        if app.lapStartClock == nil then
+            app.lapStartClock = os.preciseClock()
+            app.liveLapTrace = {}
+            app.lapPosShift = 0
+            app.lastLapSpline = CAR.splinePosition
+            app.currentLapCountRef = CAR.lapCount
+        end
+
+        local spline = CAR.splinePosition
+        if app.lastLapSpline ~= nil and spline < 0.1 and app.lastLapSpline > 0.9 then
+            app.lapPosShift = app.lapPosShift + 1
+        end
+
+        local lapTimeMs = (os.preciseClock() - app.lapStartClock) * 1000
+        local lapPos = spline + app.lapPosShift
+        app.liveLapTrace[#app.liveLapTrace + 1] = { pos = lapPos, time = lapTimeMs }
+        app.lastLapSpline = spline
+
+        if app.currentLapCountRef ~= CAR.lapCount then
+            app.lastLapTrace = app.liveLapTrace
+            app.lapStartClock = os.preciseClock()
+            app.liveLapTrace = {}
+            app.lapPosShift = 0
+            app.currentLapCountRef = CAR.lapCount
+            app.lastLapSpline = CAR.splinePosition
+        end
+    end
+
     -- Capturar estado si cambiamos de sector (deshabilitado por ahora)
     --if not app.teleporting and not SIM.isReplayActive then
     --    checkSectorChangeAndCapture()
@@ -747,6 +837,13 @@ function script.update(dt)
             app.sessionLastLapMs = CAR.previousLapTimeMs
             if CAR.isLastLapValid and (app.sessionBestLapMs == 0 or CAR.previousLapTimeMs < app.sessionBestLapMs) then
                 app.sessionBestLapMs = CAR.previousLapTimeMs
+            end
+
+            if CAR.isLastLapValid and app.lastLapTrace ~= nil and #app.lastLapTrace > 0 then
+                if app.bestLapTimeMs == nil or CAR.previousLapTimeMs < app.bestLapTimeMs then
+                    app.bestLapTimeMs = CAR.previousLapTimeMs
+                    app.bestLapTrace = app.lastLapTrace
+                end
             end
         end
 
