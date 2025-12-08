@@ -179,9 +179,41 @@ app.checkOldSettings = function()
 end
 
 app.saveSettings = function(async)
-	async = async or false
-	local jsonSettings = JSON.stringify(app.userData.settings, {pretty=true})
-	if async then io.saveAsync(app.settings_path, jsonSettings) else io.save(app.settings_path, jsonSettings) end
+        async = async or false
+        local jsonSettings = JSON.stringify(app.userData.settings, {pretty=true})
+        if async then io.saveAsync(app.settings_path, jsonSettings) else io.save(app.settings_path, jsonSettings) end
+end
+
+local function getBestTracePath(carId)
+        if not carId then carId = ac.getCarID() end
+        local basePath = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\"
+        local layout = ac.getTrackLayout()
+        return string.format("%sbestTrace_%s_%s-%s.json", basePath, carId, TRACK, layout)
+end
+
+app.saveBestLapTrace = function(carId)
+        if app.bestLapTrace == nil or #app.bestLapTrace == 0 or app.bestLapTimeMs == nil then return end
+        local filePath = getBestTracePath(carId)
+        local payload = { timeMs = app.bestLapTimeMs, trace = app.bestLapTrace }
+        io.saveAsync(filePath, JSON.stringify(payload, {pretty=true}))
+end
+
+app.loadBestLapTrace = function(carId)
+        local filePath = getBestTracePath(carId)
+        if not io.exists(filePath) then return end
+
+        local okLoad, data = pcall(io.load, filePath)
+        if not okLoad or not data then return end
+
+        local okParse, json = pcall(JSON.parse, data)
+        if not okParse or not json then return end
+
+        local trace = json.trace or json
+        if trace ~= nil and #trace > 0 then
+                app.bestLapTrace = trace
+                local timeMs = json.timeMs or (trace[#trace] and trace[#trace].time)
+                app.bestLapTimeMs = timeMs
+        end
 end
 
 app.loadSettings = function()
@@ -256,6 +288,8 @@ app.init = function()
     app.bestLapTrace = nil
     app.bestLapTimeMs = nil
     app.currentLapCountRef = CAR.lapCount
+
+    app.loadBestLapTrace()
 
 end
 
@@ -843,6 +877,7 @@ function script.update(dt)
                 if app.bestLapTimeMs == nil or CAR.previousLapTimeMs < app.bestLapTimeMs then
                     app.bestLapTimeMs = CAR.previousLapTimeMs
                     app.bestLapTrace = app.lastLapTrace
+                    app.saveBestLapTrace()
                 end
             end
         end
