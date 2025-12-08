@@ -22,14 +22,6 @@ local app = {
         liveStartClock = nil,
         liveSector = nil,
         teleportCooldownUntil = nil,
-        lapStartClock = nil,
-        lapPosShift = 0,
-        lastLapSpline = nil,
-        liveLapTrace = {},
-        lastLapTrace = nil,
-        bestLapTrace = nil,
-        bestLapTimeMs = nil,
-        currentLapCountRef = nil,
         colors = {
 		RED			= rgbm(1, 0.15, 0, 1),
 		ORANGE		= rgbm(1, 0.55, 0, 1),
@@ -184,38 +176,6 @@ app.saveSettings = function(async)
         if async then io.saveAsync(app.settings_path, jsonSettings) else io.save(app.settings_path, jsonSettings) end
 end
 
-local function getBestTracePath(carId)
-        if not carId then carId = ac.getCarID() end
-        local basePath = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\"
-        local layout = ac.getTrackLayout()
-        return string.format("%sbestTrace_%s_%s-%s.json", basePath, carId, TRACK, layout)
-end
-
-app.saveBestLapTrace = function(carId)
-        if app.bestLapTrace == nil or #app.bestLapTrace == 0 or app.bestLapTimeMs == nil then return end
-        local filePath = getBestTracePath(carId)
-        local payload = { timeMs = app.bestLapTimeMs, trace = app.bestLapTrace }
-        io.saveAsync(filePath, JSON.stringify(payload, {pretty=true}))
-end
-
-app.loadBestLapTrace = function(carId)
-        local filePath = getBestTracePath(carId)
-        if not io.exists(filePath) then return end
-
-        local okLoad, data = pcall(io.load, filePath)
-        if not okLoad or not data then return end
-
-        local okParse, json = pcall(JSON.parse, data)
-        if not okParse or not json then return end
-
-        local trace = json.trace or json
-        if trace ~= nil and #trace > 0 then
-                app.bestLapTrace = trace
-                local timeMs = json.timeMs or (trace[#trace] and trace[#trace].time)
-                app.bestLapTimeMs = timeMs
-        end
-end
-
 app.loadSettings = function()
 	local appPath = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\"
 	if not io.exists(appPath) then io.createDir(appPath) end
@@ -280,16 +240,6 @@ app.init = function()
     app.liveStartClock = nil
     app.liveSector = nil
     app.teleportCooldownUntil = nil
-    app.lapStartClock = nil
-    app.lapPosShift = 0
-    app.lastLapSpline = nil
-    app.liveLapTrace = {}
-    app.lastLapTrace = nil
-    app.bestLapTrace = nil
-    app.bestLapTimeMs = nil
-    app.currentLapCountRef = CAR.lapCount
-
-    app.loadBestLapTrace()
 
 end
 
@@ -468,41 +418,25 @@ local function drawmSectors(dt)
         ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
 end
 
-local function lapTraceTimeAtPos(trace, pos)
-        if trace == nil or #trace == 0 then return nil end
+local function idealSectorTimeAtCurrentPos(sectorIndex)
+        local startPos = appData.sectors[sectorIndex]
+        local endPos = appData.sectors[sectorIndex + 1] or 1
+        if not startPos or not endPos then return nil end
 
-        local prev = trace[1]
-        if pos <= prev.pos then return prev.time end
-
-        for i = 2, #trace do
-                local curr = trace[i]
-                if pos <= curr.pos then
-                        local span = curr.pos - prev.pos
-                        if span > 1e-6 then
-                                local factor = (pos - prev.pos) / span
-                                return prev.time + factor * (curr.time - prev.time)
-                        end
-                        return curr.time
-                end
-                prev = curr
+        local spl = CAR.splinePosition
+        local length = endPos - startPos
+        if math.abs(length) < 1e-6 then
+                return nil
         end
 
-        return trace[#trace].time
-end
+        local t = (spl - startPos) / length
+        if t < 0 then t = 0 end
+        if t > 1 then t = 1 end
 
-local function liveDeltaForCurrentPosition(sectorIndex, liveSectorTime)
-        if app.bestLapTrace == nil or app.lapStartClock == nil then return nil end
+        local bestSectorTime = appData.sectorsdata.best[sectorIndex]
+        if not bestSectorTime or bestSectorTime <= 0 then return nil end
 
-        local currentPos = CAR.splinePosition + app.lapPosShift
-        local sectorStartPos = appData.sectors[sectorIndex] or 0
-
-        local bestCurrent = lapTraceTimeAtPos(app.bestLapTrace, currentPos)
-        local bestAtStart = lapTraceTimeAtPos(app.bestLapTrace, sectorStartPos)
-
-        if bestCurrent == nil or bestAtStart == nil then return nil end
-
-        local bestRelative = (bestCurrent - bestAtStart) / 1000
-        return liveSectorTime - bestRelative
+        return bestSectorTime * t
 end
 
 
@@ -555,18 +489,16 @@ function script.main(dt)
                 -- Delta respecto al BEST del sector
                 ui.sameLine(i * app.uiDecay - 17, 0)
 
-                local best = appData.sectorsdata.best[i] or 0
                 local deltaColor = app.colors.GREY
                 local deltaText = "inv"
 
-                local liveDelta = (i == app.liveSector) and liveDeltaForCurrentPosition(i, timeNow) or nil
-                if liveDelta ~= nil then
-                        deltaColor = liveDelta <= 0 and app.colors.GREEN or app.colors.RED
-                        deltaText = string.format("%+.3fs", liveDelta)
-                elseif timeNow > 0 and best > 0 then
-                        local delta = timeNow - best
-                        deltaColor = delta <= 0 and app.colors.GREEN or app.colors.RED
-                        deltaText = string.format("%+.3fs", delta)
+                if i == app.liveSector and timeNow > 0 then
+                        local ideal = idealSectorTimeAtCurrentPos(i)
+                        if ideal ~= nil then
+                                local delta = timeNow - ideal
+                                deltaColor = (delta <= 0) and app.colors.GREEN or app.colors.RED
+                                deltaText = string.format("%+.3fs", delta)
+                        end
                 end
 
                 ui.dwriteText(deltaText, tSize - 1, deltaColor)
@@ -740,39 +672,6 @@ function script.update(dt)
         app.teleportCooldownUntil = nil
     end
 
-    if teleportActive then
-        app.lapStartClock = nil
-        app.liveLapTrace = {}
-        app.lastLapSpline = nil
-    else
-        if app.lapStartClock == nil then
-            app.lapStartClock = os.preciseClock()
-            app.liveLapTrace = {}
-            app.lapPosShift = 0
-            app.lastLapSpline = CAR.splinePosition
-            app.currentLapCountRef = CAR.lapCount
-        end
-
-        local spline = CAR.splinePosition
-        if app.lastLapSpline ~= nil and spline < 0.1 and app.lastLapSpline > 0.9 then
-            app.lapPosShift = app.lapPosShift + 1
-        end
-
-        local lapTimeMs = (os.preciseClock() - app.lapStartClock) * 1000
-        local lapPos = spline + app.lapPosShift
-        app.liveLapTrace[#app.liveLapTrace + 1] = { pos = lapPos, time = lapTimeMs }
-        app.lastLapSpline = spline
-
-        if app.currentLapCountRef ~= CAR.lapCount then
-            app.lastLapTrace = app.liveLapTrace
-            app.lapStartClock = os.preciseClock()
-            app.liveLapTrace = {}
-            app.lapPosShift = 0
-            app.currentLapCountRef = CAR.lapCount
-            app.lastLapSpline = CAR.splinePosition
-        end
-    end
-
     -- Capturar estado si cambiamos de sector (deshabilitado por ahora)
     --if not app.teleporting and not SIM.isReplayActive then
     --    checkSectorChangeAndCapture()
@@ -872,19 +771,11 @@ function script.update(dt)
             if CAR.isLastLapValid and (app.sessionBestLapMs == 0 or CAR.previousLapTimeMs < app.sessionBestLapMs) then
                 app.sessionBestLapMs = CAR.previousLapTimeMs
             end
-
-            if CAR.isLastLapValid and app.lastLapTrace ~= nil and #app.lastLapTrace > 0 then
-                if app.bestLapTimeMs == nil or CAR.previousLapTimeMs < app.bestLapTimeMs then
-                    app.bestLapTimeMs = CAR.previousLapTimeMs
-                    app.bestLapTrace = app.lastLapTrace
-                    app.saveBestLapTrace()
-                end
-            end
         end
 
-		app.prevSectorTime = CAR.previousSectorTime
-		app.currentSectorValid = true
-	end
+                app.prevSectorTime = CAR.previousSectorTime
+                app.currentSectorValid = true
+        end
 end
 ac.onSessionStart(function(sessionIndex, restarted)
 	if restarted then app.init() end
