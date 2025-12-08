@@ -39,7 +39,7 @@ local app = {
 		GREEN       = rgbm(0, 1, 0, 1),
 		CYAN        = rgbm(0, 1, 1, 1)
 	},
-	userData = {
+        userData = {
                 data = {},
                 settings = {
                         savepb = false,
@@ -49,6 +49,8 @@ local app = {
         },
         ghostSectors = {},
         ghostColor = rgbm(0.8, 0.4, 1, 0.7),
+        currentRunMeasure = {},
+        currentRunStartState = {},
         sNotif = '',
     -- Variables para Dynamic Return
     sectorStates = {},
@@ -246,6 +248,8 @@ app.init = function()
     app.sessionLastLapMs = 0
     app.sessionBestLapMs = 0
     app.currentSectorValid = true
+    app.currentRunMeasure = {}
+    app.currentRunStartState = {}
 
     app.currentSectorStartClock = nil
     app.currentSectorTimer = 0
@@ -283,6 +287,14 @@ end
 
 local function getGhostDir()
     return string.format("%s\\%s_%s", ac.getFolder(ac.FolderID.ScriptConfig), ac.getTrackFullID('_'), ac.getCarID())
+end
+
+local function ensureGhostDir()
+    local dir = getGhostDir()
+    if not io.exists(dir) then
+        pcall(io.createDir, dir)
+    end
+    return dir
 end
 
 local function getSectorIndexForProgress(progress)
@@ -369,6 +381,79 @@ app.loadSectorGhosts = function()
     end
 end
 
+local function saveSectorGhost(sectorIndex, sectorTimeSec)
+    if not SectorRecord then return end
+    if not sectorIndex or not sectorTimeSec or sectorTimeSec <= 0 then return end
+
+    local measure = app.currentRunMeasure[sectorIndex]
+    local startState = app.currentRunStartState[sectorIndex]
+    if not measure or #measure < 2 or not startState then return end
+
+    local dir = ensureGhostDir()
+    if not dir or not io.exists(dir) then return end
+
+    local startingPoint = appData.sectors[sectorIndex]
+    local finishingPoint = appData.sectors[sectorIndex + 1] or 1
+    local recordOk, record = pcall(SectorRecord, string.format('%s/ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
+    if not recordOk or not record then return end
+
+    local totalMs = math.floor(sectorTimeSec * 1000 + 0.5)
+    if totalMs <= 0 then return end
+
+    local measureSorted = {}
+    for _, v in ipairs(measure) do
+        local parsed = parseMeasureEntry(v)
+        if parsed then
+            measureSorted[#measureSorted + 1] = {parsed.pos, parsed.time}
+        end
+    end
+    table.sort(measureSorted, function(a, b) return (a[2] or 0) < (b[2] or 0) end)
+    if #measureSorted == 0 then return end
+
+    local lastEntry = measureSorted[#measureSorted]
+    local lastTime = lastEntry[2] or 0
+    if totalMs > lastTime or (lastEntry[1] ~= finishingPoint) then
+        measureSorted[#measureSorted + 1] = {finishingPoint, totalMs}
+    end
+
+    local okRegister = pcall(function()
+        return record:register(totalMs, measureSorted)
+    end)
+    if okRegister then
+        local ghostPoints = buildInterpolatedGhost(measureSorted)
+        if #ghostPoints > 1 then
+            app.ghostSectors[sectorIndex] = ghostPoints
+        end
+    end
+end
+
+local function startSectorRecording(sectorIndex)
+    if not sectorIndex then return end
+    app.currentRunMeasure[sectorIndex] = { {CAR.splinePosition, 0} }
+    app.currentRunStartState[sectorIndex] = nil
+    if SectorRecord then
+        ac.saveCarStateAsync(function(err, data)
+            if not err then
+                app.currentRunStartState[sectorIndex] = data
+            end
+        end)
+    end
+end
+
+local function recordSectorSample(now)
+    local sectorIndex = app.liveSector
+    if not app.liveStartClock or sectorIndex ~= app.currentSector then return end
+    local measure = app.currentRunMeasure[sectorIndex]
+    if not measure then return end
+
+    local elapsedMs = math.floor((now - app.liveStartClock) * 1000)
+    local last = measure[#measure]
+    local lastTime = last and (last[2] or last.time) or -1
+    if elapsedMs > lastTime then
+        measure[#measure + 1] = {CAR.splinePosition, elapsedMs}
+    end
+end
+
 
 -- ================= LÓGICA DE GUARDADO MANUAL =================
 
@@ -417,6 +502,8 @@ app.teleportToSector = function(sectorIndex, stateData)
         app.liveStartClock = nil
         app.liveSector = nil
         app.currentSectorTimer = 0
+        app.currentRunMeasure = {}
+        app.currentRunStartState = {}
 
         -- Sincronizar el último sector conocido con el sector al que nos teletransportamos
         app.lastFrameSector = sectorIndex
@@ -726,15 +813,16 @@ end
 
 
 local function isOutside()
-	if CAR.wheelsOutside > app.userData.settings.allowedTyresOut then
-		app.currentSectorValid = false
-		appData.sectorsValid[app.currentSector] = false
-		appData.mSectorsCheck.isValid = false
-		if not SIM.penaltiesEnabled and not app.isOnline then
-			ac.markLapAsSpoiled(false)
-			ac.setMessage('CUT DETECTED', 'LAP WILL NOT COUNT', 'illegal', 3)
-		end
-	end
+        if CAR.wheelsOutside > app.userData.settings.allowedTyresOut then
+                app.currentSectorValid = false
+                appData.sectorsValid[app.currentSector] = false
+                appData.mSectorsCheck.isValid = false
+                app.currentRunMeasure[app.currentSector] = nil
+                if not SIM.penaltiesEnabled and not app.isOnline then
+                        ac.markLapAsSpoiled(false)
+                        ac.setMessage('CUT DETECTED', 'LAP WILL NOT COUNT', 'illegal', 3)
+                end
+        end
 end
 
 local function mSectorsStep(currentSector)
@@ -851,8 +939,11 @@ function script.update(dt)
             app.liveStartClock = now
             app.liveSector = currentSector
             app.currentSectorTimer = 0
+            startSectorRecording(currentSector)
         end
     end
+
+    recordSectorSample(now)
 
     app.lastFrameSector = app.currentSector
 
@@ -889,25 +980,27 @@ function script.update(dt)
 			if app.currentSectorValid then
 				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
 					or appData.sectorsdata.best[appData.sector_count] == 0 then
-					app.sNotif = "S" .. appData.sector_count .. " " ..
-						string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
-					appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
-					app.saveCarData()
-				end
-			end
-		else
-			app.prevSectorTime = CAR.previousSectorTime / 1000
-			appData.current_sectors[CAR.currentSector] = app.prevSectorTime
+                                        app.sNotif = "S" .. appData.sector_count .. " " ..
+                                                string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
+                                        appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
+                                        app.saveCarData()
+                                        saveSectorGhost(appData.sector_count, app.prevSectorTime)
+                                end
+                        end
+                else
+                        app.prevSectorTime = CAR.previousSectorTime / 1000
+                        appData.current_sectors[CAR.currentSector] = app.prevSectorTime
 			if app.currentSectorValid then
 				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
 					or appData.sectorsdata.best[CAR.currentSector] == 0 then
-					app.sNotif = "S" .. CAR.currentSector .. " " ..
-						string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
-					appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
-					app.saveCarData()
-				end
-			end
-		end
+                                        app.sNotif = "S" .. CAR.currentSector .. " " ..
+                                                string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
+                                        appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
+                                        app.saveCarData()
+                                        saveSectorGhost(CAR.currentSector, app.prevSectorTime)
+                                end
+                        end
+                end
 
 		-- Personal best de vuelta (record tipo CM)
 		if CAR.isLastLapValid and CAR.previousLapTimeMs ~= 0 then
