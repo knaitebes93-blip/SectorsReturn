@@ -474,18 +474,16 @@ function script.main(dt)
 
                 if timeNow > 0 and best > 0 then
                         local delta = timeNow - best
-                        if delta <= 0 then
-                                deltaColor = app.colors.GREEN
-                        end
+                        deltaColor = delta <= 0 and app.colors.GREEN or app.colors.RED
                         deltaText = string.format("%+.3fs", delta)
                 end
 
                 ui.dwriteText(deltaText, tSize - 1, deltaColor)
         end
-	-- Fila Current (Last)
-	ui.offsetCursorX(-10)
-	ui.offsetCursorY(-3)
-	ui.dwriteText("Last", tSize)
+        -- Fila Current (Last)
+        ui.offsetCursorX(-10)
+        ui.offsetCursorY(-3)
+        ui.dwriteText("Last", tSize)
 	for i=1, appData.sector_count do
 		ui.sameLine(i*app.uiDecay - 70, 0)
 		if app.currentSector == i then
@@ -494,19 +492,19 @@ function script.main(dt)
 			ui.dwriteText(app.time_to_string(appData.current_sectors[i]), tSize)
 		end
 
-		color = app.colors.GREY
-		if appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 then
-			app.delta = 'inv'
-			hasLast = false
-		else
-			app.delta = appData.current_sectors[i] - appData.sectorsdata.best[i]
-			if app.delta <= 0 then color = app.colors.GREEN end
-			if app.delta > 80 then app.delta = 'inv' else app.delta = string.format("%.3fs", app.delta) end
-		end
-		ui.sameLine(i*app.uiDecay - 17, 0)
-		ui.dwriteText(app.delta, tSize-1, color)
-		lSum = lSum + appData.current_sectors[i]
-	end
+                color = app.colors.GREY
+                if appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 or appData.sectorsdata.best[i] == nil or appData.sectorsdata.best[i] == 0 then
+                        app.delta = 'inv'
+                        hasLast = false
+                else
+                        app.delta = appData.current_sectors[i] - appData.sectorsdata.best[i]
+                        color = app.delta <= 0 and app.colors.GREEN or app.colors.RED
+                        app.delta = string.format("%+.3fs", app.delta)
+                end
+                ui.sameLine(i*app.uiDecay - 17, 0)
+                ui.dwriteText(app.delta, tSize-1, color)
+                lSum = lSum + appData.current_sectors[i]
+        end
 
 	-- Fila Best
 	ui.offsetCursorX(-10)
