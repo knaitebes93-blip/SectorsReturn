@@ -455,10 +455,16 @@ function windowMainSettings(dt)
         ui.text("Return button:")
         ui.sameLine(140)
         returnButton:control(vec2(controlWidth, 0))
+        if ui.itemHovered() then
+            ui.setTooltip("Teleports to the last saved/used return point.")
+        end
 
-        ui.text("Save return state button:")
+        ui.text("Save Return button:")
         ui.sameLine(140)
         saveReturnButton:control(vec2(controlWidth, 0))
+        if ui.itemHovered() then
+            ui.setTooltip("Saves a return point for the next sector.")
+        end
 
         ui.separator()
         ui.text("Edit sector target")
@@ -702,6 +708,7 @@ function script.update(dt)
                 end
 
                 app.returnStates[nextSector] = data
+                app.lastReturnSector = nextSector
                 ui.toast(ui.Icons.Save, "Return point saved for Sector "..nextSector)
             end)
         end
