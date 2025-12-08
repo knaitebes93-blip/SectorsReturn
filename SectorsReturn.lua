@@ -5,7 +5,8 @@ local SIM = ac.getSim()
 local CAR = ac.getCar(0)
 local TRACK = ac.getTrackID()
 local SESSION = ac.getSession(0)
-local SectorRecord = require('SectorRecord')
+local sectorRecordOK, SectorRecord = pcall(require, 'SectorRecord')
+if not sectorRecordOK then SectorRecord = nil end
 
 local returnButton = ac.ControlButton('__APP_SECTORSPRACTICE_RETURN')
 local saveReturnButton = ac.ControlButton('__APP_SECTORSPRACTICE_SAVE')
@@ -310,6 +311,8 @@ local function parseMeasureEntry(entry)
 end
 
 local function buildInterpolatedGhost(measure)
+    if type(measure) ~= 'table' then return {} end
+
     local cleaned = {}
     for _, v in ipairs(measure) do
         local parsed = parseMeasureEntry(v)
@@ -344,13 +347,15 @@ end
 
 app.loadSectorGhosts = function()
     app.ghostSectors = {}
+    if not SectorRecord then return end
+
     local dir = getGhostDir()
-    local files = io.scanDir(dir, '*.lon')
-    if not files then return end
+    local ok, files = pcall(io.scanDir, dir, '*.lon')
+    if not ok or not files then return end
 
     for _, file in ipairs(files) do
-        local record = SectorRecord(dir .. '/' .. file)
-        if record then
+        local okRecord, record = pcall(SectorRecord, dir .. '/' .. file)
+        if okRecord and record then
             local measure = record.measure or (record.data and record.data.measure)
             local finishingPoint = record.finishingPoint or (record.data and record.data.finishingPoint)
             local sectorIndex = getSectorIndexForProgress(finishingPoint)
