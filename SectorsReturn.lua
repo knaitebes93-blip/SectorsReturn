@@ -701,33 +701,24 @@ function script.update(dt)
                 nextSector = 1
             end
 
-            ac.saveCarStateAsync(function(err, data)
-                if err then
-                    ui.toast(ui.Icons.Warning, "No se pudo guardar el punto de retorno del Sector "..nextSector)
-                    return
-                end
-
-                app.returnStates[nextSector] = data
-                app.lastReturnSector = nextSector
-                ui.toast(ui.Icons.Save, "Return point saved for Sector "..nextSector)
-            end)
+            app.saveSectorState(nextSector)
+            app.lastReturnSector = nextSector
         end
 
         if returnButton:pressed() then
             local targetSector = app.lastReturnSector or 1
-            local state = app.returnStates[targetSector]
+            local state = app.sectorStates[targetSector]
 
             if not state then
                 targetSector = 1
-                state = app.returnStates[targetSector]
+                state = app.sectorStates[targetSector]
                 if not state then
                     ui.toast(ui.Icons.Warning, "No return point saved for Sector 1")
+                    return
                 end
             end
 
-            if state then
-                app.teleportToSector(targetSector, state)
-            end
+            app.teleportToSector(targetSector)
         end
     end
 
