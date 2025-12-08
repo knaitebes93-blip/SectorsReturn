@@ -6,7 +6,7 @@ Aplicación para Assetto Corsa pensada para practicar sectores de un circuito y 
 - Detecta automáticamente los sectores del circuito y muestra tiempos en vivo, objetivo y mejores parciales guardados.
 - Divide cada sector en microsectores para seguir el ritmo dentro de cada parcial.
 - Permite guardar un **punto de retorno** por sector (se almacena el estado completo del auto). Cada guardado es específico para el auto y el trazado/layout actual.
-- Incluye un modo de retorno dinámico (DynamicReturn.lua) que registra un tramo entre dos puntos y permite relanzarlo manteniendo la velocidad y posición originales.
+- Incluye un modo de retorno dinámico (Inspirado en DynamicReturn) que registra un tramo entre dos puntos y permite relanzarlo manteniendo la velocidad y posición originales.
 
 ## Uso rápido
 1. Copia la carpeta `SectorsReturn` en `Assetto Corsa/apps/lua/` y activa la app en Content Manager o en el menú de apps de Assetto Corsa.
