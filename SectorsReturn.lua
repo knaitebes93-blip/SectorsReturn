@@ -382,23 +382,17 @@ app.loadSectorGhosts = function()
 end
 
 local function saveSectorGhost(sectorIndex, sectorTimeSec)
-    if not SectorRecord then return end
     if not sectorIndex or not sectorTimeSec or sectorTimeSec <= 0 then return end
 
     local measure = app.currentRunMeasure[sectorIndex]
     local startState = app.currentRunStartState[sectorIndex]
-    if not measure or #measure < 2 or not startState then return end
-
-    local dir = ensureGhostDir()
-    if not dir or not io.exists(dir) then return end
-
-    local startingPoint = appData.sectors[sectorIndex]
-    local finishingPoint = appData.sectors[sectorIndex + 1] or 1
-    local recordOk, record = pcall(SectorRecord, string.format('%s/ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
-    if not recordOk or not record then return end
+    if not measure or #measure < 2 then return end
 
     local totalMs = math.floor(sectorTimeSec * 1000 + 0.5)
     if totalMs <= 0 then return end
+
+    local startingPoint = appData.sectors[sectorIndex]
+    local finishingPoint = appData.sectors[sectorIndex + 1] or 1
 
     local measureSorted = {}
     for _, v in ipairs(measure) do
@@ -416,14 +410,24 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
         measureSorted[#measureSorted + 1] = {finishingPoint, totalMs}
     end
 
-    local okRegister = pcall(function()
+    local ghostPoints = buildInterpolatedGhost(measureSorted)
+    if #ghostPoints > 1 then
+        app.ghostSectors[sectorIndex] = ghostPoints
+    end
+
+    if not SectorRecord or not startState then return end
+
+    local dir = ensureGhostDir()
+    if not dir or not io.exists(dir) then return end
+
+    local recordOk, record = pcall(SectorRecord, string.format('%s/ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
+    if not recordOk or not record then return end
+
+    pcall(function()
         return record:register(totalMs, measureSorted)
     end)
-    if okRegister then
-        local ghostPoints = buildInterpolatedGhost(measureSorted)
-        if #ghostPoints > 1 then
-            app.ghostSectors[sectorIndex] = ghostPoints
-        end
+    if #ghostPoints > 1 then
+        app.ghostSectors[sectorIndex] = ghostPoints
     end
 end
 
@@ -442,7 +446,7 @@ end
 
 local function recordSectorSample(now)
     local sectorIndex = app.liveSector
-    if not app.liveStartClock or sectorIndex ~= app.currentSector then return end
+    if not app.liveStartClock or not sectorIndex then return end
     local measure = app.currentRunMeasure[sectorIndex]
     if not measure then return end
 
@@ -803,12 +807,16 @@ function script.main(dt)
 		ui.dwriteText(string.format('Theoric: %s', app.time_to_string(bSum)), tSize-2, app.colors.PURPLE)
 	end
 
-	if hasLast then
-		ui.sameLine(260)
-		ui.dwriteText(string.format('Last: %.3fs', lSum - bSum), tSize-2, app.colors.GREY)
-	end
+        if hasLast then
+                ui.sameLine(260)
+                ui.dwriteText(string.format('Last: %.3fs', lSum - bSum), tSize-2, app.colors.GREY)
+        end
 
-	ui.popDWriteFont()
+        local ghost = app.ghostSectors[app.currentSector]
+        ui.offsetCursor(vec2(-10, 4))
+        ui.dwriteText(string.format('Ghost S%d: %d pts', app.currentSector, ghost and #ghost or 0), 10, app.colors.GREY)
+
+        ui.popDWriteFont()
 end
 
 
@@ -971,12 +979,17 @@ function script.update(dt)
 		end
 
 		-- Vuelta nueva: actualizar último sector
-		if CAR.currentSector == 0 then
-			app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or app.prevSectorTime
-			app.prevSectorTime = app.prevSectorTime / 1000
-			if app.prevSectorTime ~= appData.current_sectors[appData.sector_count] then
-				appData.current_sectors[appData.sector_count] = app.prevSectorTime
-			end
+                local finishedSector = app.lastFrameSector or app.currentSector or 1
+                if finishedSector < 1 then finishedSector = 1 end
+                if finishedSector > appData.sector_count then finishedSector = appData.sector_count end
+
+                if CAR.currentSector == 0 then
+                        finishedSector = appData.sector_count
+                        app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or app.prevSectorTime
+                        app.prevSectorTime = app.prevSectorTime / 1000
+                        if app.prevSectorTime ~= appData.current_sectors[appData.sector_count] then
+                                appData.current_sectors[appData.sector_count] = app.prevSectorTime
+                        end
 			if app.currentSectorValid then
 				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
 					or appData.sectorsdata.best[appData.sector_count] == 0 then
@@ -984,7 +997,7 @@ function script.update(dt)
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
                                         appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
                                         app.saveCarData()
-                                        saveSectorGhost(appData.sector_count, app.prevSectorTime)
+                                        saveSectorGhost(finishedSector, app.prevSectorTime)
                                 end
                         end
                 else
@@ -997,7 +1010,7 @@ function script.update(dt)
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
                                         appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
                                         app.saveCarData()
-                                        saveSectorGhost(CAR.currentSector, app.prevSectorTime)
+                                        saveSectorGhost(finishedSector, app.prevSectorTime)
                                 end
                         end
                 end
