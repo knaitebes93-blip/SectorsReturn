@@ -316,7 +316,7 @@ app.teleportToSector = function(sectorIndex, stateData)
     local state = stateData or app.sectorStates[sectorIndex]
     if state then
         -- Cargar el estado guardado para este sector
-        ac.loadCarState(state)
+        ac.loadCarState(state, 30)
 
         -- Resetear timer live al teletransportar: no debe correr hasta cruzar la próxima línea de sector
         app.currentSectorStartClock = nil
