@@ -51,6 +51,7 @@ local app = {
         ghostColor = rgbm(0.8, 0.4, 1, 0.7),
         currentRunMeasure = {},
         currentRunStartState = {},
+        currentRunSector = nil,
         sNotif = '',
     -- Variables para Dynamic Return
     sectorStates = {},
@@ -435,6 +436,7 @@ local function startSectorRecording(sectorIndex)
     if not sectorIndex then return end
     app.currentRunMeasure[sectorIndex] = { {CAR.splinePosition, 0} }
     app.currentRunStartState[sectorIndex] = nil
+    app.currentRunSector = sectorIndex
     if SectorRecord then
         ac.saveCarStateAsync(function(err, data)
             if not err then
@@ -445,7 +447,7 @@ local function startSectorRecording(sectorIndex)
 end
 
 local function recordSectorSample(now)
-    local sectorIndex = app.liveSector
+    local sectorIndex = app.currentRunSector or app.liveSector
     if not app.liveStartClock or not sectorIndex then return end
     local measure = app.currentRunMeasure[sectorIndex]
     if not measure then return end
@@ -508,6 +510,7 @@ app.teleportToSector = function(sectorIndex, stateData)
         app.currentSectorTimer = 0
         app.currentRunMeasure = {}
         app.currentRunStartState = {}
+        app.currentRunSector = nil
 
         -- Sincronizar el último sector conocido con el sector al que nos teletransportamos
         app.lastFrameSector = sectorIndex
@@ -826,6 +829,9 @@ local function isOutside()
                 appData.sectorsValid[app.currentSector] = false
                 appData.mSectorsCheck.isValid = false
                 app.currentRunMeasure[app.currentSector] = nil
+                if app.currentRunSector == app.currentSector then
+                        app.currentRunSector = nil
+                end
                 if not SIM.penaltiesEnabled and not app.isOnline then
                         ac.markLapAsSpoiled(false)
                         ac.setMessage('CUT DETECTED', 'LAP WILL NOT COUNT', 'illegal', 3)
@@ -883,8 +889,8 @@ local function checkSectorChangeAndCapture()
 end
 
 function script.update(dt)
-        isOutside()
-        app.currentSector = app.getCurrentSector()
+isOutside()
+app.currentSector = app.getCurrentSector()
 
     local controlsEnabled = not SIM.isReplayActive and not SIM.isInMainMenu
     if controlsEnabled then
@@ -927,33 +933,33 @@ function script.update(dt)
     --    checkSectorChangeAndCapture()
     --end
 
-    -- Timer en vivo del sector actual:
-    -- solo corre después de cruzar al menos una línea de sector
-    if teleportActive then
-        app.currentSectorTimer = 0
-        app.liveStartClock = nil
-        app.liveSector = nil
-        app.prevSectorTime = CAR.previousSectorTime
-    elseif app.liveStartClock ~= nil then
-        app.currentSectorTimer = now - app.liveStartClock
-    else
-        app.currentSectorTimer = 0
-    end
-
-    if not teleportActive then
-        local lastSector = app.lastFrameSector
-        local currentSector = app.currentSector
-        if lastSector ~= nil and currentSector ~= nil and currentSector ~= lastSector then
-            app.liveStartClock = now
-            app.liveSector = currentSector
-            app.currentSectorTimer = 0
-            startSectorRecording(currentSector)
+        -- Timer en vivo del sector actual:
+        -- solo corre después de cruzar al menos una línea de sector
+        if teleportActive then
+                app.currentSectorTimer = 0
+                app.liveStartClock = nil
+                app.liveSector = nil
+                app.prevSectorTime = CAR.previousSectorTime
+        elseif app.liveStartClock ~= nil then
+                app.currentSectorTimer = now - app.liveStartClock
+        else
+                app.currentSectorTimer = 0
         end
-    end
 
-    recordSectorSample(now)
+        if not teleportActive then
+                local lastSector = app.lastFrameSector
+                local currentSector = app.currentSector
+                if lastSector ~= nil and currentSector ~= nil and currentSector ~= lastSector then
+                        app.liveStartClock = now
+                        app.liveSector = currentSector
+                        app.currentSectorTimer = 0
+                        startSectorRecording(currentSector)
+                end
+        end
 
-    app.lastFrameSector = app.currentSector
+        recordSectorSample(now)
+
+        app.lastFrameSector = app.currentSector
 
 	if CAR.isInPit then
 		for i in ipairs(appData.sectorsValid) do appData.sectorsValid[i] = true end
@@ -978,39 +984,34 @@ function script.update(dt)
 			appData.sectorsdata.best[CAR.currentSector+1] = 0
 		end
 
-		-- Vuelta nueva: actualizar último sector
-                local finishedSector = app.lastFrameSector or app.currentSector or 1
-                if finishedSector < 1 then finishedSector = 1 end
-                if finishedSector > appData.sector_count then finishedSector = appData.sector_count end
-
+                -- Vuelta nueva: actualizar último sector
                 if CAR.currentSector == 0 then
-                        finishedSector = appData.sector_count
                         app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or app.prevSectorTime
                         app.prevSectorTime = app.prevSectorTime / 1000
                         if app.prevSectorTime ~= appData.current_sectors[appData.sector_count] then
                                 appData.current_sectors[appData.sector_count] = app.prevSectorTime
                         end
-			if app.currentSectorValid then
-				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
-					or appData.sectorsdata.best[appData.sector_count] == 0 then
+                        if app.currentSectorValid then
+                                if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
+                                        or appData.sectorsdata.best[appData.sector_count] == 0 then
                                         app.sNotif = "S" .. appData.sector_count .. " " ..
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
                                         appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
                                         app.saveCarData()
-                                        saveSectorGhost(finishedSector, app.prevSectorTime)
+                                        saveSectorGhost(appData.sector_count, app.prevSectorTime)
                                 end
                         end
                 else
                         app.prevSectorTime = CAR.previousSectorTime / 1000
                         appData.current_sectors[CAR.currentSector] = app.prevSectorTime
-			if app.currentSectorValid then
-				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
-					or appData.sectorsdata.best[CAR.currentSector] == 0 then
+                        if app.currentSectorValid then
+                                if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
+                                        or appData.sectorsdata.best[CAR.currentSector] == 0 then
                                         app.sNotif = "S" .. CAR.currentSector .. " " ..
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
                                         appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
                                         app.saveCarData()
-                                        saveSectorGhost(finishedSector, app.prevSectorTime)
+                                        saveSectorGhost(CAR.currentSector, app.prevSectorTime)
                                 end
                         end
                 end
