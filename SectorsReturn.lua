@@ -6,11 +6,14 @@ local CAR = ac.getCar(0)
 local TRACK = ac.getTrackID()
 local SESSION = ac.getSession(0)
 
+local returnButton = ac.ControlButton('__APP_SECTORSPRACTICE_RETURN')
+local saveReturnButton = ac.ControlButton('__APP_SECTORSPRACTICE_SAVE')
+
 local app = {
-	title = "Sectors Practice v"..appVersion,
-	settings_path = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\_settings.json",
-	font = ui.DWriteFont("Roboto:/assets/fonts/Roboto-Medium.ttf;Weight=Regular"),
-	delta = 0,
+        title = "Sectors Practice v"..appVersion,
+        settings_path = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\_settings.json",
+        font = ui.DWriteFont("Roboto:/assets/fonts/Roboto-Medium.ttf;Weight=Regular"),
+        delta = 0,
 	uiDecay = 110, -- Espacio horizontal entre columnas de sectores
 	prevSectorTime = 0,
 	currentSector = 1,
@@ -44,10 +47,12 @@ local app = {
 	sNotif = '',
     -- Variables para Dynamic Return
     sectorStates = {},
+    returnStates = {},
     teleporting = false,
     lastFrameSector = 1,
     sessionLastLapMs = 0,
-    sessionBestLapMs = 0
+    sessionBestLapMs = 0,
+    lastReturnSector = 1
 }
 
 
@@ -225,9 +230,11 @@ app.init = function()
 		appData.sectorsdata.target[i] = appData.sectorsdata.target[i] or 0
 		appData.sectorsValid[i] = true
 	end
-	app.loadPersonalBest()
-	app.set_microSectors()
-	if SIM.allowedTyresOut > -1 then app.allowedTyresOut = app.userData.settings.allowedTyresOut end
+    app.loadPersonalBest()
+    app.set_microSectors()
+    if SIM.allowedTyresOut > -1 then app.allowedTyresOut = app.userData.settings.allowedTyresOut end
+    app.returnStates = {}
+    app.lastReturnSector = 1
     app.loadSectorStates()   -- NUEVO: cargar states guardados para este auto+pista
 
     app.sessionLastLapMs = 0
@@ -305,10 +312,11 @@ end
 
 -- ================= LÓGICA DE TELETRANSPORTACIÓN =================
 
-app.teleportToSector = function(sectorIndex)
-    if app.sectorStates[sectorIndex] then
+app.teleportToSector = function(sectorIndex, stateData)
+    local state = stateData or app.sectorStates[sectorIndex]
+    if state then
         -- Cargar el estado guardado para este sector
-        ac.loadCarState(app.sectorStates[sectorIndex])
+        ac.loadCarState(state)
 
         -- Resetear timer live al teletransportar: no debe correr hasta cruzar la próxima línea de sector
         app.currentSectorStartClock = nil
@@ -331,6 +339,8 @@ app.teleportToSector = function(sectorIndex)
         app.teleportCooldownUntil = os.preciseClock() + 1.0
         -- Pequeña pausa para evitar guardar estado mientras te teletransportas
         setTimeout(function() app.teleporting = false end, 1.0)
+
+        app.lastReturnSector = sectorIndex
     end
 end
 
@@ -441,11 +451,21 @@ end
 
 
 function windowMainSettings(dt)
-	ui.text("Edit sector target")
-	for i=1, appData.sector_count do
-		ui.pushItemWidth(80)
-		local v, vChanged = ui.inputText('Sector '..i, appData.sectorsdata.target[i], 0)
-		if vChanged and tonumber(v) ~= nil and tonumber(v) > 0 then
+        local controlWidth = 160
+        ui.text("Return button:")
+        ui.sameLine(140)
+        returnButton:control(vec2(controlWidth, 0))
+
+        ui.text("Save return state button:")
+        ui.sameLine(140)
+        saveReturnButton:control(vec2(controlWidth, 0))
+
+        ui.separator()
+        ui.text("Edit sector target")
+        for i=1, appData.sector_count do
+                ui.pushItemWidth(80)
+                local v, vChanged = ui.inputText('Sector '..i, appData.sectorsdata.target[i], 0)
+                if vChanged and tonumber(v) ~= nil and tonumber(v) > 0 then
 			appData.sectorsdata.target[i] = v
 			app.saveCarData()
 		end
@@ -665,6 +685,44 @@ end
 function script.update(dt)
         isOutside()
         app.currentSector = app.getCurrentSector()
+
+    local controlsEnabled = not SIM.isReplayActive and not SIM.isInMainMenu
+    if controlsEnabled then
+        if saveReturnButton:pressed() then
+            local currentSector = app.currentSector or 1
+            local nextSector = currentSector + 1
+            if currentSector == appData.sector_count then
+                nextSector = 1
+            end
+
+            ac.saveCarStateAsync(function(err, data)
+                if err then
+                    ui.toast(ui.Icons.Warning, "No se pudo guardar el punto de retorno del Sector "..nextSector)
+                    return
+                end
+
+                app.returnStates[nextSector] = data
+                ui.toast(ui.Icons.Save, "Return point saved for Sector "..nextSector)
+            end)
+        end
+
+        if returnButton:pressed() then
+            local targetSector = app.lastReturnSector or 1
+            local state = app.returnStates[targetSector]
+
+            if not state then
+                targetSector = 1
+                state = app.returnStates[targetSector]
+                if not state then
+                    ui.toast(ui.Icons.Warning, "No return point saved for Sector 1")
+                end
+            end
+
+            if state then
+                app.teleportToSector(targetSector, state)
+            end
+        end
+    end
 
     local now = os.preciseClock()
     local teleportActive = app.teleporting or (app.teleportCooldownUntil ~= nil and now < app.teleportCooldownUntil)
