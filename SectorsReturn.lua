@@ -49,6 +49,7 @@ local app = {
                 },
         },
         ghostSectors = {},
+        ghostInputs = {},
         ghostColor = rgbm(0.8, 0.4, 1, 0.7),
         ghostSectorDuration = {},
         ghostPlayback = { active = false, sector = nil, timeMs = 0, totalMs = 0 },
@@ -261,6 +262,7 @@ app.init = function()
     app.liveStartClock = nil
     app.liveSector = nil
     app.teleportCooldownUntil = nil
+    app.lastFrameSector = nil
     resetGhostPlayback()
 
 end
@@ -291,11 +293,16 @@ app.loadSectorStates = function(carId)
 end
 
 local function getGhostDir()
-    return string.format("%s\\%s_%s", ac.getFolder(ac.FolderID.ScriptConfig), ac.getTrackFullID('_'), ac.getCarID())
+    local baseDir = ac.getFolder(ac.FolderID.ACDocuments) .. "\\apps\\SectorsReturn\\ghosts"
+    return string.format("%s\\%s_%s", baseDir, ac.getTrackFullID('_'), ac.getCarID())
 end
 
 local function ensureGhostDir()
     local dir = getGhostDir()
+    local baseDir = ac.getFolder(ac.FolderID.ACDocuments) .. "\\apps\\SectorsReturn\\ghosts"
+    if not io.exists(baseDir) then
+        pcall(io.createDir, baseDir)
+    end
     if not io.exists(dir) then
         pcall(io.createDir, dir)
     end
@@ -323,12 +330,14 @@ local function parseMeasureEntry(entry)
     if type(entry) ~= 'table' then return nil end
     local pos = entry[1] or entry.pos or entry.spline or entry.progress
     local time = entry[2] or entry.time
+    local gas = entry.gas or entry[3]
+    local brake = entry.brake or entry[4]
     if pos == nil or time == nil then return nil end
-    return {pos = pos, time = time}
+    return {pos = pos, time = time, gas = gas, brake = brake}
 end
 
 local function buildInterpolatedGhost(measure)
-    if type(measure) ~= 'table' then return {} end
+    if type(measure) ~= 'table' then return {}, {} end
 
     local cleaned = {}
     for _, v in ipairs(measure) do
@@ -336,9 +345,17 @@ local function buildInterpolatedGhost(measure)
         if parsed then cleaned[#cleaned + 1] = parsed end
     end
     table.sort(cleaned, function(a, b) return a.time < b.time end)
-    if #cleaned < 2 then return {} end
+    if #cleaned < 2 then return {}, {} end
+
+    local function lerpOptional(a, b, k)
+        if a == nil and b == nil then return nil end
+        if a == nil then return b end
+        if b == nil then return a end
+        return a + (b - a) * k
+    end
 
     local points = {}
+    local inputs = {}
     local stepMs = 50
     local totalTime = cleaned[#cleaned].time
     local idx = 1
@@ -356,10 +373,15 @@ local function buildInterpolatedGhost(measure)
         local pos = a.pos + (b.pos - a.pos) * k
         local worldPos = ac.trackProgressToWorldCoordinate(pos % 1)
         points[#points + 1] = worldPos
+        inputs[#inputs + 1] = {
+            gas = lerpOptional(a.gas, b.gas, k),
+            brake = lerpOptional(a.brake, b.brake, k)
+        }
     end
 
     points[#points + 1] = ac.trackProgressToWorldCoordinate(cleaned[#cleaned].pos % 1)
-    return points
+    inputs[#inputs + 1] = { gas = cleaned[#cleaned].gas, brake = cleaned[#cleaned].brake }
+    return points, inputs
 end
 
 local function getMeasureDurationMs(measure)
@@ -399,9 +421,12 @@ end
 local function drawGhostCar(pos, nextPos, color)
     if not pos or not nextPos then return end
 
+    pos = pos + vec3(0, 0.4, 0)
+    nextPos = nextPos + vec3(0, 0.4, 0)
+
     local forward = nextPos - pos
     local forwardLen = forward:length()
-    if not forwardLen or forwardLen < 0.01 then return end
+    if not forwardLen or forwardLen < 0.05 then return end
     forward = forward / forwardLen
 
     local up = vec3(0, 1, 0)
@@ -413,23 +438,40 @@ local function drawGhostCar(pos, nextPos, color)
         right = right / rightLen
     end
 
-    local halfLength = 1.8
-    local halfWidth = 0.6
+    local arrowColor = rgbm(0.1, 1.0, 0.1, 1.0)
+    local arrowLength = 3.2
+    local baseOffset = 1.2
+    local halfWidth = 1.2
 
-    local frontCenter = pos + forward * halfLength
-    local backCenter = pos - forward * halfLength
+    local tip = pos + forward * arrowLength
+    local baseCenter = pos - forward * baseOffset
+    local left = baseCenter + right * halfWidth
+    local rightPt = baseCenter - right * halfWidth
 
-    local lf = frontCenter + right * halfWidth
-    local rf = frontCenter - right * halfWidth
-    local lb = backCenter + right * halfWidth
-    local rb = backCenter - right * halfWidth
+    render.debugLine(left, tip, arrowColor, arrowColor)
+    render.debugLine(rightPt, tip, arrowColor, arrowColor)
+    render.debugLine(left, rightPt, arrowColor, arrowColor)
+    render.debugLine(pos, tip, arrowColor, arrowColor)
+end
 
-    render.debugLine(lf, rf, color, color)
-    render.debugLine(rf, rb, color, color)
-    render.debugLine(rb, lb, color, color)
-    render.debugLine(lb, lf, color, color)
+local function getGhostSegmentColor(input)
+    if not input then return app.ghostColor or rgbm(0, 1, 0, 0.8) end
 
-    render.debugLine(frontCenter, frontCenter + forward * 0.5, color, color)
+    local brake = tonumber(input.brake) or 0
+    local gas = tonumber(input.gas) or 0
+    local alpha = 0.9
+
+    if brake > 0.05 then
+        local intensity = math.min(math.max(brake, 0), 1)
+        return rgbm(0.2 + 0.8 * intensity, 0, 0, alpha)
+    end
+
+    if gas > 0.05 then
+        local intensity = math.min(math.max(gas, 0), 1)
+        return rgbm(0, 0.5 + 0.5 * intensity, 0, alpha)
+    end
+
+    return rgbm(0.6, 0.6, 0.2, alpha)
 end
 
 function resetGhostPlayback()
@@ -441,24 +483,29 @@ end
 
 app.loadSectorGhosts = function()
     app.ghostSectors = {}
+    app.ghostInputs = {}
     app.ghostSectorDuration = {}
-    if not SectorRecord then return end
+    local dir = ensureGhostDir()
+    if not dir or not io.exists(dir) then return end
 
-    local dir = getGhostDir()
-    local ok, files = pcall(io.scanDir, dir, '*.lon')
+    local ok, files = pcall(io.scanDir, dir, 'ghost_*.json')
     if not ok or not files then return end
 
     for _, file in ipairs(files) do
-        local okRecord, record = pcall(SectorRecord, dir .. '/' .. file)
-        if okRecord and record then
-            local measure = record.measure or (record.data and record.data.measure)
-            local finishingPoint = record.finishingPoint or (record.data and record.data.finishingPoint)
-            local sectorIndex = getSectorIndexForProgress(finishingPoint)
-            if sectorIndex and measure then
-                local ghostPoints = buildInterpolatedGhost(measure)
-                if #ghostPoints > 1 then
-                    app.ghostSectors[sectorIndex] = ghostPoints
-                    app.ghostSectorDuration[sectorIndex] = getMeasureDurationMs(measure)
+        local sectorIndex = tonumber(string.match(file, '^ghost_(%d+)%.json$'))
+        if sectorIndex then
+            local okLoad, content = pcall(io.load, string.format('%s\\%s', dir, file))
+            if okLoad and content then
+                local okJson, data = pcall(JSON.parse, content)
+                if okJson and type(data) == 'table' and type(data.measure) == 'table' then
+                    local measure = data.measure
+                    local ghostPoints, ghostInputs = buildInterpolatedGhost(measure)
+                    if #ghostPoints > 1 then
+                        local durationMs = tonumber(data.durationMs) or getMeasureDurationMs(measure)
+                        app.ghostSectors[sectorIndex] = ghostPoints
+                        app.ghostInputs[sectorIndex] = ghostInputs
+                        app.ghostSectorDuration[sectorIndex] = durationMs
+                    end
                 end
             end
         end
@@ -482,7 +529,7 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
     for _, v in ipairs(measure) do
         local parsed = parseMeasureEntry(v)
         if parsed then
-            measureSorted[#measureSorted + 1] = {parsed.pos, parsed.time}
+            measureSorted[#measureSorted + 1] = {parsed.pos, parsed.time, parsed.gas or 0, parsed.brake or 0}
         end
     end
     table.sort(measureSorted, function(a, b) return (a[2] or 0) < (b[2] or 0) end)
@@ -491,34 +538,56 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
     local lastEntry = measureSorted[#measureSorted]
     local lastTime = lastEntry[2] or 0
     if totalMs > lastTime or (lastEntry[1] ~= finishingPoint) then
-        measureSorted[#measureSorted + 1] = {finishingPoint, totalMs}
+        measureSorted[#measureSorted + 1] = {finishingPoint, totalMs, lastEntry[3] or 0, lastEntry[4] or 0}
     end
 
-    local ghostPoints = buildInterpolatedGhost(measureSorted)
+    local ghostPoints, ghostInputs = buildInterpolatedGhost(measureSorted)
     if #ghostPoints > 1 then
         app.ghostSectors[sectorIndex] = ghostPoints
+        app.ghostInputs[sectorIndex] = ghostInputs
         app.ghostSectorDuration[sectorIndex] = totalMs
     end
 
-    if not SectorRecord or not startState then return end
+    if not startState then
+        local okState, currentState = pcall(ac.saveCarState)
+        if okState and currentState then
+            startState = currentState
+            app.currentRunStartState[sectorIndex] = app.currentRunStartState[sectorIndex] or currentState
+        end
+    end
 
     local dir = ensureGhostDir()
-    if not dir or not io.exists(dir) then return end
+    if dir then
+        local ghostData = {
+            startingPoint = startingPoint,
+            finishingPoint = finishingPoint,
+            durationMs = totalMs,
+            measure = measureSorted
+        }
 
-    local recordOk, record = pcall(SectorRecord, string.format('%s/ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
-    if not recordOk or not record then return end
+        local okJson, jsonData = pcall(JSON.stringify, ghostData, {pretty = true})
+        if okJson and jsonData then
+            pcall(io.saveAsync, string.format('%s\\ghost_%d.json', dir, sectorIndex), jsonData)
+        end
+    end
 
-    pcall(function()
-        return record:register(totalMs, measureSorted)
-    end)
-    if #ghostPoints > 1 then
-        app.ghostSectors[sectorIndex] = ghostPoints
+    if SectorRecord and startState and dir and io.exists(dir) then
+        local recordOk, record = pcall(SectorRecord, string.format('%s\\ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
+        if recordOk and record then
+            pcall(function()
+                return record:register(totalMs, measureSorted)
+            end)
+            if #ghostPoints > 1 then
+                app.ghostSectors[sectorIndex] = ghostPoints
+                app.ghostInputs[sectorIndex] = ghostInputs
+            end
+        end
     end
 end
 
 local function startSectorRecording(sectorIndex)
     if not sectorIndex then return end
-    app.currentRunMeasure[sectorIndex] = { {CAR.splinePosition, 0} }
+    app.currentRunMeasure[sectorIndex] = { {CAR.splinePosition, 0, gas = CAR.gas, brake = CAR.brake} }
     app.currentRunStartState[sectorIndex] = nil
     app.currentRunSector = sectorIndex
     if SectorRecord then
@@ -540,7 +609,7 @@ local function recordSectorSample(now)
     local last = measure[#measure]
     local lastTime = last and (last[2] or last.time) or -1
     if elapsedMs > lastTime then
-        measure[#measure + 1] = {CAR.splinePosition, elapsedMs}
+        measure[#measure + 1] = {CAR.splinePosition, elapsedMs, gas = CAR.gas, brake = CAR.brake}
     end
 end
 
@@ -1036,7 +1105,7 @@ app.currentSector = app.getCurrentSector()
         if not teleportActive then
                 local lastSector = app.lastFrameSector
                 local currentSector = app.currentSector
-                if lastSector ~= nil and currentSector ~= nil and currentSector ~= lastSector then
+                if currentSector ~= nil and (lastSector == nil or currentSector ~= lastSector) then
                         app.liveStartClock = now
                         app.liveSector = currentSector
                         app.currentSectorTimer = 0
@@ -1154,6 +1223,7 @@ render.on('main.track.transparent', function ()
         if not app.userData.settings.showGhost then return end
 
         local ghost = app.ghostSectors[app.currentSector]
+        local ghostInputs = app.ghostInputs and app.ghostInputs[app.currentSector] or nil
         if not ghost or #ghost < 2 then return end
 
         render.setBlendMode(render.BlendMode.AlphaBlend)
@@ -1161,7 +1231,16 @@ render.on('main.track.transparent', function ()
         render.setDepthMode(render.DepthMode.ReadOnly)
 
         for i = 1, #ghost - 1 do
-                render.debugLine(ghost[i], ghost[i + 1], app.ghostColor, app.ghostColor)
+                local color = app.ghostColor
+
+                if ghostInputs and ghostInputs[i] then
+                        local ok, c = pcall(getGhostSegmentColor, ghostInputs[i])
+                        if ok and c then
+                                color = c
+                        end
+                end
+
+                render.debugLine(ghost[i], ghost[i + 1], color, color)
         end
 
         if app.ghostPlayback and app.ghostPlayback.active and app.ghostPlayback.sector == app.currentSector then
@@ -1180,6 +1259,18 @@ render.on('main.track.transparent', function ()
                                 if idx < 1 then idx = 1 end
                                 if idx > ghostCount - 1 then idx = ghostCount - 1 end
                                 posNext = ghost[idx + 1]
+                        elseif (posNext - pos):length() < 0.05 then
+                                local totalMs = math.max(app.ghostPlayback.totalMs or 1, 1)
+                                local ghostCount = #ghost
+                                local maxIndex = ghostCount - 1
+                                local t = math.min(math.max(tMs / totalMs, 0), 1)
+                                local fIndex = t * maxIndex
+                                local idx = math.floor(fIndex) + 1
+                                if idx < ghostCount then
+                                        posNext = ghost[idx + 1]
+                                elseif ghostCount > 1 then
+                                        posNext = ghost[ghostCount - 1]
+                                end
                         end
 
                         if posNext then
