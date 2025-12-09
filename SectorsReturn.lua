@@ -262,6 +262,7 @@ app.init = function()
     app.liveStartClock = nil
     app.liveSector = nil
     app.teleportCooldownUntil = nil
+    app.lastFrameSector = nil
     resetGhostPlayback()
 
 end
@@ -430,9 +431,9 @@ local function drawGhostCar(pos, nextPos, color)
     end
 
     local arrowColor = rgbm(0.1, 1.0, 0.1, 1.0)
-    local arrowLength = 2.4
-    local baseOffset = 0.8
-    local halfWidth = 0.8
+    local arrowLength = 2.8
+    local baseOffset = 1.0
+    local halfWidth = 1.0
 
     local tip = pos + forward * arrowLength
     local baseCenter = pos - forward * baseOffset
@@ -534,6 +535,14 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
         app.ghostSectors[sectorIndex] = ghostPoints
         app.ghostInputs[sectorIndex] = ghostInputs
         app.ghostSectorDuration[sectorIndex] = totalMs
+    end
+
+    if not startState then
+        local okState, currentState = pcall(ac.saveCarState)
+        if okState and currentState then
+            startState = currentState
+            app.currentRunStartState[sectorIndex] = app.currentRunStartState[sectorIndex] or currentState
+        end
     end
 
     if not SectorRecord or not startState then return end
@@ -1073,7 +1082,7 @@ app.currentSector = app.getCurrentSector()
         if not teleportActive then
                 local lastSector = app.lastFrameSector
                 local currentSector = app.currentSector
-                if lastSector ~= nil and currentSector ~= nil and currentSector ~= lastSector then
+                if currentSector ~= nil and (lastSector == nil or currentSector ~= lastSector) then
                         app.liveStartClock = now
                         app.liveSector = currentSector
                         app.currentSectorTimer = 0
