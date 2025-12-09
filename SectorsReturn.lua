@@ -7,6 +7,7 @@ local TRACK = ac.getTrackID()
 local SESSION = ac.getSession(0)
 local sectorRecordOK, SectorRecord = pcall(require, 'SectorRecord')
 if not sectorRecordOK then SectorRecord = nil end
+local resetGhostPlayback
 
 local returnButton = ac.ControlButton('__APP_SECTORSPRACTICE_RETURN')
 local saveReturnButton = ac.ControlButton('__APP_SECTORSPRACTICE_SAVE')
@@ -49,6 +50,8 @@ local app = {
         },
         ghostSectors = {},
         ghostColor = rgbm(0.8, 0.4, 1, 0.7),
+        ghostSectorDuration = {},
+        ghostPlayback = { active = false, sector = nil, timeMs = 0, totalMs = 0 },
         currentRunMeasure = {},
         currentRunStartState = {},
         currentRunSector = nil,
@@ -258,6 +261,7 @@ app.init = function()
     app.liveStartClock = nil
     app.liveSector = nil
     app.teleportCooldownUntil = nil
+    resetGhostPlayback()
 
 end
 
@@ -358,8 +362,50 @@ local function buildInterpolatedGhost(measure)
     return points
 end
 
+local function getMeasureDurationMs(measure)
+    if type(measure) ~= 'table' then return 0 end
+    local duration = 0
+    for _, v in ipairs(measure) do
+        local parsed = parseMeasureEntry(v)
+        if parsed and parsed.time and parsed.time > duration then
+            duration = parsed.time
+        end
+    end
+    return duration
+end
+
+local function getGhostPositionAtTime(sectorIndex, timeMs)
+    local ghost = app.ghostSectors[sectorIndex]
+    if not ghost or #ghost < 2 then return nil end
+
+    local totalMs = app.ghostPlayback and app.ghostPlayback.totalMs or 0
+    if (not totalMs or totalMs <= 0) and app.ghostSectorDuration then
+        totalMs = app.ghostSectorDuration[sectorIndex] or 0
+    end
+    if not totalMs or totalMs <= 0 then return nil end
+
+    local t = math.min(math.max(timeMs / totalMs, 0), 1)
+
+    local maxIndex = #ghost - 1
+    local fIndex = t * maxIndex
+    local i = math.floor(fIndex) + 1
+    local frac = fIndex - math.floor(fIndex)
+
+    local p1 = ghost[i]
+    local p2 = ghost[math.min(i + 1, #ghost)]
+    return p1 + (p2 - p1) * frac
+end
+
+function resetGhostPlayback()
+    app.ghostPlayback.active = false
+    app.ghostPlayback.sector = nil
+    app.ghostPlayback.timeMs = 0
+    app.ghostPlayback.totalMs = 0
+end
+
 app.loadSectorGhosts = function()
     app.ghostSectors = {}
+    app.ghostSectorDuration = {}
     if not SectorRecord then return end
 
     local dir = getGhostDir()
@@ -376,6 +422,7 @@ app.loadSectorGhosts = function()
                 local ghostPoints = buildInterpolatedGhost(measure)
                 if #ghostPoints > 1 then
                     app.ghostSectors[sectorIndex] = ghostPoints
+                    app.ghostSectorDuration[sectorIndex] = getMeasureDurationMs(measure)
                 end
             end
         end
@@ -414,6 +461,7 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
     local ghostPoints = buildInterpolatedGhost(measureSorted)
     if #ghostPoints > 1 then
         app.ghostSectors[sectorIndex] = ghostPoints
+        app.ghostSectorDuration[sectorIndex] = totalMs
     end
 
     if not SectorRecord or not startState then return end
@@ -511,6 +559,7 @@ app.teleportToSector = function(sectorIndex, stateData)
         app.currentRunMeasure = {}
         app.currentRunStartState = {}
         app.currentRunSector = nil
+        resetGhostPlayback()
 
         -- Sincronizar el último sector conocido con el sector al que nos teletransportamos
         app.lastFrameSector = sectorIndex
@@ -832,6 +881,7 @@ local function isOutside()
                 if app.currentRunSector == app.currentSector then
                         app.currentRunSector = nil
                 end
+                resetGhostPlayback()
                 if not SIM.penaltiesEnabled and not app.isOnline then
                         ac.markLapAsSpoiled(false)
                         ac.setMessage('CUT DETECTED', 'LAP WILL NOT COUNT', 'illegal', 3)
@@ -940,6 +990,7 @@ app.currentSector = app.getCurrentSector()
                 app.liveStartClock = nil
                 app.liveSector = nil
                 app.prevSectorTime = CAR.previousSectorTime
+                resetGhostPlayback()
         elseif app.liveStartClock ~= nil then
                 app.currentSectorTimer = now - app.liveStartClock
         else
@@ -954,10 +1005,34 @@ app.currentSector = app.getCurrentSector()
                         app.liveSector = currentSector
                         app.currentSectorTimer = 0
                         startSectorRecording(currentSector)
+                        local ghost = app.ghostSectors[currentSector]
+                        if ghost and #ghost > 1 then
+                                local totalMs = app.ghostSectorDuration[currentSector] or 0
+                                if (not totalMs or totalMs <= 0) and appData.sectorsdata.best[currentSector] then
+                                        totalMs = math.floor((appData.sectorsdata.best[currentSector] or 0) * 1000 + 0.5)
+                                end
+                                if totalMs and totalMs > 0 then
+                                        app.ghostPlayback.active = true
+                                        app.ghostPlayback.sector = currentSector
+                                        app.ghostPlayback.timeMs = 0
+                                        app.ghostPlayback.totalMs = totalMs
+                                else
+                                        resetGhostPlayback()
+                                end
+                        else
+                                resetGhostPlayback()
+                        end
                 end
         end
 
         recordSectorSample(now)
+
+        if app.ghostPlayback.active and app.ghostPlayback.sector == app.currentSector and app.ghostPlayback.totalMs > 0 then
+                app.ghostPlayback.timeMs = app.ghostPlayback.timeMs + dt * 1000
+                if app.ghostPlayback.timeMs > app.ghostPlayback.totalMs then
+                        app.ghostPlayback.timeMs = app.ghostPlayback.totalMs
+                end
+        end
 
         app.lastFrameSector = app.currentSector
 
@@ -1051,6 +1126,13 @@ render.on('main.track.transparent', function ()
 
         for i = 1, #ghost - 1 do
                 render.debugLine(ghost[i], ghost[i + 1], app.ghostColor, app.ghostColor)
+        end
+
+        if app.ghostPlayback and app.ghostPlayback.active and app.ghostPlayback.sector == app.currentSector then
+                local pos = getGhostPositionAtTime(app.currentSector, app.ghostPlayback.timeMs)
+                if pos then
+                        render.debugCircle(pos, 0.7, app.ghostColor)
+                end
         end
 end)
 ac.onSessionStart(function(sessionIndex, restarted)
