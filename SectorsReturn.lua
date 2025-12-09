@@ -293,11 +293,16 @@ app.loadSectorStates = function(carId)
 end
 
 local function getGhostDir()
-    return string.format("%s\\%s_%s", ac.getFolder(ac.FolderID.ScriptConfig), ac.getTrackFullID('_'), ac.getCarID())
+    local baseDir = ac.getFolder(ac.FolderID.ACDocuments) .. "\\apps\\SectorsReturn\\ghosts"
+    return string.format("%s\\%s_%s", baseDir, ac.getTrackFullID('_'), ac.getCarID())
 end
 
 local function ensureGhostDir()
     local dir = getGhostDir()
+    local baseDir = ac.getFolder(ac.FolderID.ACDocuments) .. "\\apps\\SectorsReturn\\ghosts"
+    if not io.exists(baseDir) then
+        pcall(io.createDir, baseDir)
+    end
     if not io.exists(dir) then
         pcall(io.createDir, dir)
     end
@@ -480,24 +485,27 @@ app.loadSectorGhosts = function()
     app.ghostSectors = {}
     app.ghostInputs = {}
     app.ghostSectorDuration = {}
-    if not SectorRecord then return end
-
     local dir = ensureGhostDir()
-    local ok, files = pcall(io.scanDir, dir, '*.lon')
+    if not dir or not io.exists(dir) then return end
+
+    local ok, files = pcall(io.scanDir, dir, 'ghost_*.json')
     if not ok or not files then return end
 
     for _, file in ipairs(files) do
-        local okRecord, record = pcall(SectorRecord, dir .. '/' .. file)
-        if okRecord and record then
-            local measure = record.measure or (record.data and record.data.measure)
-            local finishingPoint = record.finishingPoint or (record.data and record.data.finishingPoint)
-            local sectorIndex = getSectorIndexForProgress(finishingPoint)
-            if sectorIndex and measure then
-                local ghostPoints, ghostInputs = buildInterpolatedGhost(measure)
-                if #ghostPoints > 1 then
-                    app.ghostSectors[sectorIndex] = ghostPoints
-                    app.ghostInputs[sectorIndex] = ghostInputs
-                    app.ghostSectorDuration[sectorIndex] = getMeasureDurationMs(measure)
+        local sectorIndex = tonumber(string.match(file, '^ghost_(%d+)%.json$'))
+        if sectorIndex then
+            local okLoad, content = pcall(io.load, string.format('%s\\%s', dir, file))
+            if okLoad and content then
+                local okJson, data = pcall(JSON.parse, content)
+                if okJson and type(data) == 'table' and type(data.measure) == 'table' then
+                    local measure = data.measure
+                    local ghostPoints, ghostInputs = buildInterpolatedGhost(measure)
+                    if #ghostPoints > 1 then
+                        local durationMs = tonumber(data.durationMs) or getMeasureDurationMs(measure)
+                        app.ghostSectors[sectorIndex] = ghostPoints
+                        app.ghostInputs[sectorIndex] = ghostInputs
+                        app.ghostSectorDuration[sectorIndex] = durationMs
+                    end
                 end
             end
         end
@@ -548,20 +556,32 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
         end
     end
 
-    if not SectorRecord or not startState then return end
-
     local dir = ensureGhostDir()
-    if not dir or not io.exists(dir) then return end
+    if dir then
+        local ghostData = {
+            startingPoint = startingPoint,
+            finishingPoint = finishingPoint,
+            durationMs = totalMs,
+            measure = measureSorted
+        }
 
-    local recordOk, record = pcall(SectorRecord, string.format('%s\\ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
-    if not recordOk or not record then return end
+        local okJson, jsonData = pcall(JSON.stringify, ghostData, {pretty = true})
+        if okJson and jsonData then
+            pcall(io.saveAsync, string.format('%s\\ghost_%d.json', dir, sectorIndex), jsonData)
+        end
+    end
 
-    pcall(function()
-        return record:register(totalMs, measureSorted)
-    end)
-    if #ghostPoints > 1 then
-        app.ghostSectors[sectorIndex] = ghostPoints
-        app.ghostInputs[sectorIndex] = ghostInputs
+    if SectorRecord and startState and dir and io.exists(dir) then
+        local recordOk, record = pcall(SectorRecord, string.format('%s\\ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
+        if recordOk and record then
+            pcall(function()
+                return record:register(totalMs, measureSorted)
+            end)
+            if #ghostPoints > 1 then
+                app.ghostSectors[sectorIndex] = ghostPoints
+                app.ghostInputs[sectorIndex] = ghostInputs
+            end
+        end
     end
 end
 
