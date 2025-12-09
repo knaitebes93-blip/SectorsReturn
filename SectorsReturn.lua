@@ -396,6 +396,42 @@ local function getGhostPositionAtTime(sectorIndex, timeMs)
     return p1 + (p2 - p1) * frac
 end
 
+local function drawGhostCar(pos, nextPos, color)
+    if not pos or not nextPos then return end
+
+    local forward = nextPos - pos
+    local forwardLen = forward:length()
+    if not forwardLen or forwardLen < 0.01 then return end
+    forward = forward / forwardLen
+
+    local up = vec3(0, 1, 0)
+    local right = forward:cross(up)
+    local rightLen = right:length()
+    if not rightLen or rightLen < 0.01 then
+        right = vec3(1, 0, 0)
+    else
+        right = right / rightLen
+    end
+
+    local halfLength = 1.8
+    local halfWidth = 0.6
+
+    local frontCenter = pos + forward * halfLength
+    local backCenter = pos - forward * halfLength
+
+    local lf = frontCenter + right * halfWidth
+    local rf = frontCenter - right * halfWidth
+    local lb = backCenter + right * halfWidth
+    local rb = backCenter - right * halfWidth
+
+    render.debugLine(lf, rf, color, color)
+    render.debugLine(rf, rb, color, color)
+    render.debugLine(rb, lb, color, color)
+    render.debugLine(lb, lf, color, color)
+
+    render.debugLine(frontCenter, frontCenter + forward * 0.5, color, color)
+end
+
 function resetGhostPlayback()
     app.ghostPlayback.active = false
     app.ghostPlayback.sector = nil
@@ -1129,9 +1165,26 @@ render.on('main.track.transparent', function ()
         end
 
         if app.ghostPlayback and app.ghostPlayback.active and app.ghostPlayback.sector == app.currentSector then
-                local pos = getGhostPositionAtTime(app.currentSector, app.ghostPlayback.timeMs)
+                local tMs = app.ghostPlayback.timeMs or 0
+                local pos = getGhostPositionAtTime(app.currentSector, tMs)
                 if pos then
-                        render.debugCircle(pos, 0.7, app.ghostColor)
+                        local posNext = getGhostPositionAtTime(app.currentSector, tMs + 80)
+
+                        if not posNext then
+                                local totalMs = math.max(app.ghostPlayback.totalMs or 1, 1)
+                                local ghostCount = #ghost
+                                local maxIndex = ghostCount - 1
+                                local t = math.min(math.max(tMs / totalMs, 0), 1)
+                                local fIndex = t * maxIndex
+                                local idx = math.floor(fIndex) + 1
+                                if idx < 1 then idx = 1 end
+                                if idx > ghostCount - 1 then idx = ghostCount - 1 end
+                                posNext = ghost[idx + 1]
+                        end
+
+                        if posNext then
+                                drawGhostCar(pos, posNext, app.ghostColor)
+                        end
                 end
         end
 end)
