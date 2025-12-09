@@ -416,9 +416,12 @@ end
 local function drawGhostCar(pos, nextPos, color)
     if not pos or not nextPos then return end
 
+    pos = pos + vec3(0, 0.4, 0)
+    nextPos = nextPos + vec3(0, 0.4, 0)
+
     local forward = nextPos - pos
     local forwardLen = forward:length()
-    if not forwardLen or forwardLen < 0.01 then return end
+    if not forwardLen or forwardLen < 0.05 then return end
     forward = forward / forwardLen
 
     local up = vec3(0, 1, 0)
@@ -431,9 +434,9 @@ local function drawGhostCar(pos, nextPos, color)
     end
 
     local arrowColor = rgbm(0.1, 1.0, 0.1, 1.0)
-    local arrowLength = 2.8
-    local baseOffset = 1.0
-    local halfWidth = 1.0
+    local arrowLength = 3.2
+    local baseOffset = 1.2
+    local halfWidth = 1.2
 
     local tip = pos + forward * arrowLength
     local baseCenter = pos - forward * baseOffset
@@ -479,7 +482,7 @@ app.loadSectorGhosts = function()
     app.ghostSectorDuration = {}
     if not SectorRecord then return end
 
-    local dir = getGhostDir()
+    local dir = ensureGhostDir()
     local ok, files = pcall(io.scanDir, dir, '*.lon')
     if not ok or not files then return end
 
@@ -518,7 +521,7 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
     for _, v in ipairs(measure) do
         local parsed = parseMeasureEntry(v)
         if parsed then
-            measureSorted[#measureSorted + 1] = {parsed.pos, parsed.time, gas = parsed.gas, brake = parsed.brake}
+            measureSorted[#measureSorted + 1] = {parsed.pos, parsed.time, parsed.gas or 0, parsed.brake or 0}
         end
     end
     table.sort(measureSorted, function(a, b) return (a[2] or 0) < (b[2] or 0) end)
@@ -527,7 +530,7 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
     local lastEntry = measureSorted[#measureSorted]
     local lastTime = lastEntry[2] or 0
     if totalMs > lastTime or (lastEntry[1] ~= finishingPoint) then
-        measureSorted[#measureSorted + 1] = {finishingPoint, totalMs}
+        measureSorted[#measureSorted + 1] = {finishingPoint, totalMs, lastEntry[3] or 0, lastEntry[4] or 0}
     end
 
     local ghostPoints, ghostInputs = buildInterpolatedGhost(measureSorted)
@@ -550,7 +553,7 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
     local dir = ensureGhostDir()
     if not dir or not io.exists(dir) then return end
 
-    local recordOk, record = pcall(SectorRecord, string.format('%s/ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
+    local recordOk, record = pcall(SectorRecord, string.format('%s\\ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
     if not recordOk or not record then return end
 
     pcall(function()
@@ -1236,6 +1239,18 @@ render.on('main.track.transparent', function ()
                                 if idx < 1 then idx = 1 end
                                 if idx > ghostCount - 1 then idx = ghostCount - 1 end
                                 posNext = ghost[idx + 1]
+                        elseif (posNext - pos):length() < 0.05 then
+                                local totalMs = math.max(app.ghostPlayback.totalMs or 1, 1)
+                                local ghostCount = #ghost
+                                local maxIndex = ghostCount - 1
+                                local t = math.min(math.max(tMs / totalMs, 0), 1)
+                                local fIndex = t * maxIndex
+                                local idx = math.floor(fIndex) + 1
+                                if idx < ghostCount then
+                                        posNext = ghost[idx + 1]
+                                elseif ghostCount > 1 then
+                                        posNext = ghost[ghostCount - 1]
+                                end
                         end
 
                         if posNext then
