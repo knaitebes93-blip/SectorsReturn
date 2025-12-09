@@ -46,6 +46,8 @@ local app = {
                         savepb = false,
                         allowedTyresOut = 3,
                         showGhost = false,
+                        showGhostLine = false,
+                        showGhostCar = false,
                 },
         },
         ghostSectors = {},
@@ -197,16 +199,28 @@ app.loadSettings = function()
 	local appPath = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\"
 	if not io.exists(appPath) then io.createDir(appPath) end
 
-	if io.exists(app.settings_path) then
-		local data = io.load(app.settings_path)
-		local json_full = JSON.parse(data)
-		if json_full ~= nil then
-			local doSave = false
-			for key, value in pairs(app.userData.settings) do
-				if json_full[key] == nil then
-					json_full[key] = app.userData.settings[key]
-					doSave = true
-				end
+        if io.exists(app.settings_path) then
+                local data = io.load(app.settings_path)
+                local json_full = JSON.parse(data)
+                if json_full ~= nil then
+                        local doSave = false
+                        if json_full.showGhostLine == nil and json_full.showGhost ~= nil then
+                                json_full.showGhostLine = json_full.showGhost
+                                json_full.showGhostCar = json_full.showGhost
+                                doSave = true
+                        end
+
+                        if json_full.showGhostLine == nil and json_full.showGhostCar == nil then
+                                json_full.showGhostLine = false
+                                json_full.showGhostCar = false
+                                doSave = true
+                        end
+
+                        for key, value in pairs(app.userData.settings) do
+                                if json_full[key] == nil then
+                                        json_full[key] = app.userData.settings[key]
+                                        doSave = true
+                                end
 			end
 			app.userData.settings = json_full
 			if doSave then app.saveSettings() end
@@ -822,8 +836,12 @@ function windowMainSettings(dt)
         ui.dwriteText('Session:', 12)
         ui.sameLine(80)
         ui.dwriteText(app.isOnline and 'Online' or 'Offline', 12)
-        if ui.checkbox('Show Sector Ghost', app.userData.settings.showGhost) then
-                app.userData.settings.showGhost = not app.userData.settings.showGhost
+        if ui.checkbox('Show ghost line', app.userData.settings.showGhostLine) then
+                app.userData.settings.showGhostLine = not app.userData.settings.showGhostLine
+                app.saveSettings(false)
+        end
+        if ui.checkbox('Show ghost car', app.userData.settings.showGhostCar) then
+                app.userData.settings.showGhostCar = not app.userData.settings.showGhostCar
                 app.saveSettings(false)
         end
     -- ... (resto de settings igual) ...
@@ -1220,36 +1238,44 @@ app.currentSector = app.getCurrentSector()
 end
 
 render.on('main.track.transparent', function ()
-        if not app.userData.settings.showGhost then return end
+        local showLine = app.userData.settings.showGhostLine
+        local showCar = app.userData.settings.showGhostCar
+
+        if not showLine and not showCar then return end
 
         local ghost = app.ghostSectors[app.currentSector]
-        local ghostInputs = app.ghostInputs and app.ghostInputs[app.currentSector] or nil
-        if not ghost or #ghost < 2 then return end
 
         render.setBlendMode(render.BlendMode.AlphaBlend)
         render.setCullMode(render.CullMode.None)
         render.setDepthMode(render.DepthMode.ReadOnly)
 
-        for i = 1, #ghost - 1 do
-                local color = app.ghostColor
+        if showLine then
+                for sectorIndex, ghostSector in pairs(app.ghostSectors) do
+                        if ghostSector and #ghostSector >= 2 then
+                                local ghostInputs = app.ghostInputs and app.ghostInputs[sectorIndex] or nil
+                                for i = 1, #ghostSector - 1 do
+                                        local color = app.ghostColor
 
-                if ghostInputs and ghostInputs[i] then
-                        local ok, c = pcall(getGhostSegmentColor, ghostInputs[i])
-                        if ok and c then
-                                color = c
+                                        if ghostInputs and ghostInputs[i] then
+                                                local ok, c = pcall(getGhostSegmentColor, ghostInputs[i])
+                                                if ok and c then
+                                                        color = c
+                                                end
+                                        end
+
+                                        render.debugLine(ghostSector[i], ghostSector[i + 1], color, color)
+                                end
                         end
                 end
-
-                render.debugLine(ghost[i], ghost[i + 1], color, color)
         end
 
-        if app.ghostPlayback and app.ghostPlayback.active and app.ghostPlayback.sector == app.currentSector then
+        if showCar and app.ghostPlayback and app.ghostPlayback.active and app.ghostPlayback.sector == app.currentSector then
                 local tMs = app.ghostPlayback.timeMs or 0
                 local pos = getGhostPositionAtTime(app.currentSector, tMs)
                 if pos then
                         local posNext = getGhostPositionAtTime(app.currentSector, tMs + 80)
 
-                        if not posNext then
+                        if not posNext and ghost and #ghost >= 2 then
                                 local totalMs = math.max(app.ghostPlayback.totalMs or 1, 1)
                                 local ghostCount = #ghost
                                 local maxIndex = ghostCount - 1
@@ -1259,7 +1285,7 @@ render.on('main.track.transparent', function ()
                                 if idx < 1 then idx = 1 end
                                 if idx > ghostCount - 1 then idx = ghostCount - 1 end
                                 posNext = ghost[idx + 1]
-                        elseif (posNext - pos):length() < 0.05 then
+                        elseif posNext and ghost and (posNext - pos):length() < 0.05 then
                                 local totalMs = math.max(app.ghostPlayback.totalMs or 1, 1)
                                 local ghostCount = #ghost
                                 local maxIndex = ghostCount - 1
