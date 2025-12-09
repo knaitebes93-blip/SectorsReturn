@@ -54,6 +54,7 @@ local app = {
         ghostInputs = {},
         ghostColor = rgbm(0.8, 0.4, 1, 0.7),
         ghostSectorDuration = {},
+        ghostSectorTimeline = {},
         ghostPlayback = { active = false, sector = nil, timeMs = 0, totalMs = 0 },
         currentRunMeasure = {},
         currentRunStartState = {},
@@ -411,6 +412,69 @@ local function getMeasureDurationMs(measure)
     return duration
 end
 
+local function buildGhostTimeline(measure, startPos, endPos)
+    if type(measure) ~= 'table' or not startPos or not endPos then return nil end
+
+    local parsed = {}
+    for _, v in ipairs(measure) do
+        local entry = parseMeasureEntry(v)
+        if entry and entry.pos ~= nil and entry.time ~= nil then
+            parsed[#parsed + 1] = { pos = entry.pos, time = entry.time }
+        end
+    end
+
+    if #parsed < 2 then return nil end
+
+    table.sort(parsed, function(a, b) return (a.time or 0) < (b.time or 0) end)
+
+    local timeline = {}
+    local wrap = endPos < startPos
+    local lastPos = nil
+    for _, p in ipairs(parsed) do
+        local pos = p.pos
+        if wrap and pos < startPos then pos = pos + 1 end
+        if lastPos and pos < lastPos then
+            while pos < lastPos do pos = pos + 1 end
+        end
+        timeline[#timeline + 1] = { pos = pos, time = p.time }
+        lastPos = pos
+    end
+
+    return timeline
+end
+
+local function ghostTimeAtCurrentPos(sectorIndex)
+    if not sectorIndex then return nil end
+
+    local startPos = appData.sectors[sectorIndex]
+    local endPos = appData.sectors[sectorIndex + 1] or 1
+    if not startPos or not endPos then return nil end
+
+    local timeline = app.ghostSectorTimeline and app.ghostSectorTimeline[sectorIndex]
+    if not timeline or #timeline < 2 then return nil end
+
+    local spl = CAR.splinePosition
+    if endPos < startPos then
+        if spl < startPos then spl = spl + 1 end
+        endPos = endPos + 1
+    end
+
+    local targetPos = spl
+    if targetPos <= timeline[1].pos then return timeline[1].time / 1000 end
+
+    for i = 1, #timeline - 1 do
+        local a = timeline[i]
+        local b = timeline[i + 1]
+        if targetPos >= a.pos and targetPos <= b.pos then
+            local span = b.pos - a.pos
+            local k = span > 0 and (targetPos - a.pos) / span or 0
+            return (a.time + (b.time - a.time) * k) / 1000
+        end
+    end
+
+    return timeline[#timeline].time / 1000
+end
+
 local function getGhostPositionAtTime(sectorIndex, timeMs)
     local ghost = app.ghostSectors[sectorIndex]
     if not ghost or #ghost < 2 then return nil end
@@ -500,6 +564,7 @@ app.loadSectorGhosts = function()
     app.ghostSectors = {}
     app.ghostInputs = {}
     app.ghostSectorDuration = {}
+    app.ghostSectorTimeline = {}
     local dir = ensureGhostDir()
     if not dir or not io.exists(dir) then return end
 
@@ -517,9 +582,16 @@ app.loadSectorGhosts = function()
                     local ghostPoints, ghostInputs = buildInterpolatedGhost(measure)
                     if #ghostPoints > 1 then
                         local durationMs = tonumber(data.durationMs) or getMeasureDurationMs(measure)
+                        local startPos = appData.sectors[sectorIndex]
+                        local endPos = appData.sectors[sectorIndex + 1] or 1
+                        local timeline = buildGhostTimeline(measure, startPos, endPos)
+                        if (not durationMs or durationMs <= 0) and timeline and #timeline > 0 then
+                            durationMs = timeline[#timeline].time
+                        end
                         app.ghostSectors[sectorIndex] = ghostPoints
                         app.ghostInputs[sectorIndex] = ghostInputs
                         app.ghostSectorDuration[sectorIndex] = durationMs
+                        app.ghostSectorTimeline[sectorIndex] = timeline
                     end
                 end
             end
@@ -561,6 +633,8 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
         app.ghostSectors[sectorIndex] = ghostPoints
         app.ghostInputs[sectorIndex] = ghostInputs
         app.ghostSectorDuration[sectorIndex] = totalMs
+        local timeline = buildGhostTimeline(measureSorted, startingPoint, finishingPoint)
+        app.ghostSectorTimeline[sectorIndex] = timeline
     end
 
     if not startState then
@@ -641,6 +715,12 @@ local function startLiveTiming(sectorIndex, now)
         local ghost = app.ghostSectors[sectorIndex]
         if ghost and #ghost > 1 then
                 local totalMs = app.ghostSectorDuration[sectorIndex] or 0
+                if (not totalMs or totalMs <= 0) and app.ghostSectorTimeline[sectorIndex] then
+                        local timeline = app.ghostSectorTimeline[sectorIndex]
+                        if timeline and #timeline > 0 then
+                                totalMs = timeline[#timeline].time
+                        end
+                end
                 if (not totalMs or totalMs <= 0) and appData.sectorsdata.best[sectorIndex] then
                         totalMs = math.floor((appData.sectorsdata.best[sectorIndex] or 0) * 1000 + 0.5)
                 end
@@ -918,9 +998,12 @@ function script.main(dt)
                 local deltaText = "inv"
 
                 if i == app.liveSector and timeNow > 0 then
-                        local ideal = idealSectorTimeAtCurrentPos(i)
-                        if ideal ~= nil then
-                                local delta = timeNow - ideal
+                        local refTime = ghostTimeAtCurrentPos(i)
+                        if refTime == nil then
+                                refTime = idealSectorTimeAtCurrentPos(i)
+                        end
+                        if refTime ~= nil then
+                                local delta = timeNow - refTime
                                 deltaColor = (delta <= 0) and app.colors.GREEN or app.colors.RED
                                 deltaText = string.format("%+.3fs", delta)
                         end
