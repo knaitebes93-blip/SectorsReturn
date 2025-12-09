@@ -5,6 +5,9 @@ local SIM = ac.getSim()
 local CAR = ac.getCar(0)
 local TRACK = ac.getTrackID()
 local SESSION = ac.getSession(0)
+local sectorRecordOK, SectorRecord = pcall(require, 'SectorRecord')
+if not sectorRecordOK then SectorRecord = nil end
+local resetGhostPlayback
 
 local returnButton = ac.ControlButton('__APP_SECTORSPRACTICE_RETURN')
 local saveReturnButton = ac.ControlButton('__APP_SECTORSPRACTICE_SAVE')
@@ -37,14 +40,22 @@ local app = {
 		GREEN       = rgbm(0, 1, 0, 1),
 		CYAN        = rgbm(0, 1, 1, 1)
 	},
-	userData = {
-		data = {},
-		settings = {
-			savepb = false,
-			allowedTyresOut = 3,
-		},
-	},
-	sNotif = '',
+        userData = {
+                data = {},
+                settings = {
+                        savepb = false,
+                        allowedTyresOut = 3,
+                        showGhost = false,
+                },
+        },
+        ghostSectors = {},
+        ghostColor = rgbm(0.8, 0.4, 1, 0.7),
+        ghostSectorDuration = {},
+        ghostPlayback = { active = false, sector = nil, timeMs = 0, totalMs = 0 },
+        currentRunMeasure = {},
+        currentRunStartState = {},
+        currentRunSector = nil,
+        sNotif = '',
     -- Variables para Dynamic Return
     sectorStates = {},
     returnStates = {},
@@ -236,10 +247,13 @@ app.init = function()
     app.returnStates = {}
     app.lastReturnSector = 1
     app.loadSectorStates()   -- NUEVO: cargar states guardados para este auto+pista
+    app.loadSectorGhosts()
 
     app.sessionLastLapMs = 0
     app.sessionBestLapMs = 0
     app.currentSectorValid = true
+    app.currentRunMeasure = {}
+    app.currentRunStartState = {}
 
     app.currentSectorStartClock = nil
     app.currentSectorTimer = 0
@@ -247,6 +261,7 @@ app.init = function()
     app.liveStartClock = nil
     app.liveSector = nil
     app.teleportCooldownUntil = nil
+    resetGhostPlayback()
 
 end
 
@@ -272,6 +287,260 @@ app.loadSectorStates = function(carId)
                 app.sectorStates[i] = content
             end
         end
+    end
+end
+
+local function getGhostDir()
+    return string.format("%s\\%s_%s", ac.getFolder(ac.FolderID.ScriptConfig), ac.getTrackFullID('_'), ac.getCarID())
+end
+
+local function ensureGhostDir()
+    local dir = getGhostDir()
+    if not io.exists(dir) then
+        pcall(io.createDir, dir)
+    end
+    return dir
+end
+
+local function getSectorIndexForProgress(progress)
+    if progress == nil then return nil end
+    for i = 1, appData.sector_count do
+        local startPos = appData.sectors[i]
+        local endPos = appData.sectors[i + 1] or 1
+        local p = progress
+        if endPos < startPos then
+            if p < startPos then p = p + 1 end
+            endPos = endPos + 1
+        end
+        if p >= startPos and p <= endPos then
+            return i
+        end
+    end
+    return nil
+end
+
+local function parseMeasureEntry(entry)
+    if type(entry) ~= 'table' then return nil end
+    local pos = entry[1] or entry.pos or entry.spline or entry.progress
+    local time = entry[2] or entry.time
+    if pos == nil or time == nil then return nil end
+    return {pos = pos, time = time}
+end
+
+local function buildInterpolatedGhost(measure)
+    if type(measure) ~= 'table' then return {} end
+
+    local cleaned = {}
+    for _, v in ipairs(measure) do
+        local parsed = parseMeasureEntry(v)
+        if parsed then cleaned[#cleaned + 1] = parsed end
+    end
+    table.sort(cleaned, function(a, b) return a.time < b.time end)
+    if #cleaned < 2 then return {} end
+
+    local points = {}
+    local stepMs = 50
+    local totalTime = cleaned[#cleaned].time
+    local idx = 1
+    for t = 0, totalTime, stepMs do
+        while idx < #cleaned and cleaned[idx + 1].time < t do
+            idx = idx + 1
+        end
+        local a = cleaned[idx]
+        local b = cleaned[math.min(idx + 1, #cleaned)]
+        local span = b.time - a.time
+        if span <= 0 then span = 1 end
+        local k = (t - a.time) / span
+        if k < 0 then k = 0 end
+        if k > 1 then k = 1 end
+        local pos = a.pos + (b.pos - a.pos) * k
+        local worldPos = ac.trackProgressToWorldCoordinate(pos % 1)
+        points[#points + 1] = worldPos
+    end
+
+    points[#points + 1] = ac.trackProgressToWorldCoordinate(cleaned[#cleaned].pos % 1)
+    return points
+end
+
+local function getMeasureDurationMs(measure)
+    if type(measure) ~= 'table' then return 0 end
+    local duration = 0
+    for _, v in ipairs(measure) do
+        local parsed = parseMeasureEntry(v)
+        if parsed and parsed.time and parsed.time > duration then
+            duration = parsed.time
+        end
+    end
+    return duration
+end
+
+local function getGhostPositionAtTime(sectorIndex, timeMs)
+    local ghost = app.ghostSectors[sectorIndex]
+    if not ghost or #ghost < 2 then return nil end
+
+    local totalMs = app.ghostPlayback and app.ghostPlayback.totalMs or 0
+    if (not totalMs or totalMs <= 0) and app.ghostSectorDuration then
+        totalMs = app.ghostSectorDuration[sectorIndex] or 0
+    end
+    if not totalMs or totalMs <= 0 then return nil end
+
+    local t = math.min(math.max(timeMs / totalMs, 0), 1)
+
+    local maxIndex = #ghost - 1
+    local fIndex = t * maxIndex
+    local i = math.floor(fIndex) + 1
+    local frac = fIndex - math.floor(fIndex)
+
+    local p1 = ghost[i]
+    local p2 = ghost[math.min(i + 1, #ghost)]
+    return p1 + (p2 - p1) * frac
+end
+
+local function drawGhostCar(pos, nextPos, color)
+    if not pos or not nextPos then return end
+
+    local forward = nextPos - pos
+    local forwardLen = forward:length()
+    if not forwardLen or forwardLen < 0.01 then return end
+    forward = forward / forwardLen
+
+    local up = vec3(0, 1, 0)
+    local right = forward:cross(up)
+    local rightLen = right:length()
+    if not rightLen or rightLen < 0.01 then
+        right = vec3(1, 0, 0)
+    else
+        right = right / rightLen
+    end
+
+    local halfLength = 1.8
+    local halfWidth = 0.6
+
+    local frontCenter = pos + forward * halfLength
+    local backCenter = pos - forward * halfLength
+
+    local lf = frontCenter + right * halfWidth
+    local rf = frontCenter - right * halfWidth
+    local lb = backCenter + right * halfWidth
+    local rb = backCenter - right * halfWidth
+
+    render.debugLine(lf, rf, color, color)
+    render.debugLine(rf, rb, color, color)
+    render.debugLine(rb, lb, color, color)
+    render.debugLine(lb, lf, color, color)
+
+    render.debugLine(frontCenter, frontCenter + forward * 0.5, color, color)
+end
+
+function resetGhostPlayback()
+    app.ghostPlayback.active = false
+    app.ghostPlayback.sector = nil
+    app.ghostPlayback.timeMs = 0
+    app.ghostPlayback.totalMs = 0
+end
+
+app.loadSectorGhosts = function()
+    app.ghostSectors = {}
+    app.ghostSectorDuration = {}
+    if not SectorRecord then return end
+
+    local dir = getGhostDir()
+    local ok, files = pcall(io.scanDir, dir, '*.lon')
+    if not ok or not files then return end
+
+    for _, file in ipairs(files) do
+        local okRecord, record = pcall(SectorRecord, dir .. '/' .. file)
+        if okRecord and record then
+            local measure = record.measure or (record.data and record.data.measure)
+            local finishingPoint = record.finishingPoint or (record.data and record.data.finishingPoint)
+            local sectorIndex = getSectorIndexForProgress(finishingPoint)
+            if sectorIndex and measure then
+                local ghostPoints = buildInterpolatedGhost(measure)
+                if #ghostPoints > 1 then
+                    app.ghostSectors[sectorIndex] = ghostPoints
+                    app.ghostSectorDuration[sectorIndex] = getMeasureDurationMs(measure)
+                end
+            end
+        end
+    end
+end
+
+local function saveSectorGhost(sectorIndex, sectorTimeSec)
+    if not sectorIndex or not sectorTimeSec or sectorTimeSec <= 0 then return end
+
+    local measure = app.currentRunMeasure[sectorIndex]
+    local startState = app.currentRunStartState[sectorIndex]
+    if not measure or #measure < 2 then return end
+
+    local totalMs = math.floor(sectorTimeSec * 1000 + 0.5)
+    if totalMs <= 0 then return end
+
+    local startingPoint = appData.sectors[sectorIndex]
+    local finishingPoint = appData.sectors[sectorIndex + 1] or 1
+
+    local measureSorted = {}
+    for _, v in ipairs(measure) do
+        local parsed = parseMeasureEntry(v)
+        if parsed then
+            measureSorted[#measureSorted + 1] = {parsed.pos, parsed.time}
+        end
+    end
+    table.sort(measureSorted, function(a, b) return (a[2] or 0) < (b[2] or 0) end)
+    if #measureSorted == 0 then return end
+
+    local lastEntry = measureSorted[#measureSorted]
+    local lastTime = lastEntry[2] or 0
+    if totalMs > lastTime or (lastEntry[1] ~= finishingPoint) then
+        measureSorted[#measureSorted + 1] = {finishingPoint, totalMs}
+    end
+
+    local ghostPoints = buildInterpolatedGhost(measureSorted)
+    if #ghostPoints > 1 then
+        app.ghostSectors[sectorIndex] = ghostPoints
+        app.ghostSectorDuration[sectorIndex] = totalMs
+    end
+
+    if not SectorRecord or not startState then return end
+
+    local dir = ensureGhostDir()
+    if not dir or not io.exists(dir) then return end
+
+    local recordOk, record = pcall(SectorRecord, string.format('%s/ghost_S%d.lon', dir, sectorIndex), startState, startingPoint, finishingPoint)
+    if not recordOk or not record then return end
+
+    pcall(function()
+        return record:register(totalMs, measureSorted)
+    end)
+    if #ghostPoints > 1 then
+        app.ghostSectors[sectorIndex] = ghostPoints
+    end
+end
+
+local function startSectorRecording(sectorIndex)
+    if not sectorIndex then return end
+    app.currentRunMeasure[sectorIndex] = { {CAR.splinePosition, 0} }
+    app.currentRunStartState[sectorIndex] = nil
+    app.currentRunSector = sectorIndex
+    if SectorRecord then
+        ac.saveCarStateAsync(function(err, data)
+            if not err then
+                app.currentRunStartState[sectorIndex] = data
+            end
+        end)
+    end
+end
+
+local function recordSectorSample(now)
+    local sectorIndex = app.currentRunSector or app.liveSector
+    if not app.liveStartClock or not sectorIndex then return end
+    local measure = app.currentRunMeasure[sectorIndex]
+    if not measure then return end
+
+    local elapsedMs = math.floor((now - app.liveStartClock) * 1000)
+    local last = measure[#measure]
+    local lastTime = last and (last[2] or last.time) or -1
+    if elapsedMs > lastTime then
+        measure[#measure + 1] = {CAR.splinePosition, elapsedMs}
     end
 end
 
@@ -323,6 +592,10 @@ app.teleportToSector = function(sectorIndex, stateData)
         app.liveStartClock = nil
         app.liveSector = nil
         app.currentSectorTimer = 0
+        app.currentRunMeasure = {}
+        app.currentRunStartState = {}
+        app.currentRunSector = nil
+        resetGhostPlayback()
 
         -- Sincronizar el último sector conocido con el sector al que nos teletransportamos
         app.lastFrameSector = sectorIndex
@@ -475,17 +748,21 @@ function windowMainSettings(dt)
 			appData.sectorsdata.target[i] = v
 			app.saveCarData()
 		end
-	end
-	ui.separator()
-	ui.dwriteText('Session:', 12)
-	ui.sameLine(80)
-	ui.dwriteText(app.isOnline and 'Online' or 'Offline', 12)
+        end
+        ui.separator()
+        ui.dwriteText('Session:', 12)
+        ui.sameLine(80)
+        ui.dwriteText(app.isOnline and 'Online' or 'Offline', 12)
+        if ui.checkbox('Show Sector Ghost', app.userData.settings.showGhost) then
+                app.userData.settings.showGhost = not app.userData.settings.showGhost
+                app.saveSettings(false)
+        end
     -- ... (resto de settings igual) ...
     if ui.checkbox('Force save CM personnal best', app.userData.settings.savepb) then
-		app.userData.settings.savepb = not app.userData.settings.savepb
-		if app.userData.settings.savepb then app.savePersonalBest(appData.pb) end
-		app.saveSettings(false)
-	end
+                app.userData.settings.savepb = not app.userData.settings.savepb
+                if app.userData.settings.savepb then app.savePersonalBest(appData.pb) end
+                app.saveSettings(false)
+        end
 end
 
 -- Función principal de dibujado
@@ -618,25 +895,34 @@ function script.main(dt)
 		ui.dwriteText(string.format('Theoric: %s', app.time_to_string(bSum)), tSize-2, app.colors.PURPLE)
 	end
 
-	if hasLast then
-		ui.sameLine(260)
-		ui.dwriteText(string.format('Last: %.3fs', lSum - bSum), tSize-2, app.colors.GREY)
-	end
+        if hasLast then
+                ui.sameLine(260)
+                ui.dwriteText(string.format('Last: %.3fs', lSum - bSum), tSize-2, app.colors.GREY)
+        end
 
-	ui.popDWriteFont()
+        local ghost = app.ghostSectors[app.currentSector]
+        ui.offsetCursor(vec2(-10, 4))
+        ui.dwriteText(string.format('Ghost S%d: %d pts', app.currentSector, ghost and #ghost or 0), 10, app.colors.GREY)
+
+        ui.popDWriteFont()
 end
 
 
 local function isOutside()
-	if CAR.wheelsOutside > app.userData.settings.allowedTyresOut then
-		app.currentSectorValid = false
-		appData.sectorsValid[app.currentSector] = false
-		appData.mSectorsCheck.isValid = false
-		if not SIM.penaltiesEnabled and not app.isOnline then
-			ac.markLapAsSpoiled(false)
-			ac.setMessage('CUT DETECTED', 'LAP WILL NOT COUNT', 'illegal', 3)
-		end
-	end
+        if CAR.wheelsOutside > app.userData.settings.allowedTyresOut then
+                app.currentSectorValid = false
+                appData.sectorsValid[app.currentSector] = false
+                appData.mSectorsCheck.isValid = false
+                app.currentRunMeasure[app.currentSector] = nil
+                if app.currentRunSector == app.currentSector then
+                        app.currentRunSector = nil
+                end
+                resetGhostPlayback()
+                if not SIM.penaltiesEnabled and not app.isOnline then
+                        ac.markLapAsSpoiled(false)
+                        ac.setMessage('CUT DETECTED', 'LAP WILL NOT COUNT', 'illegal', 3)
+                end
+        end
 end
 
 local function mSectorsStep(currentSector)
@@ -689,8 +975,8 @@ local function checkSectorChangeAndCapture()
 end
 
 function script.update(dt)
-        isOutside()
-        app.currentSector = app.getCurrentSector()
+isOutside()
+app.currentSector = app.getCurrentSector()
 
     local controlsEnabled = not SIM.isReplayActive and not SIM.isInMainMenu
     if controlsEnabled then
@@ -733,30 +1019,58 @@ function script.update(dt)
     --    checkSectorChangeAndCapture()
     --end
 
-    -- Timer en vivo del sector actual:
-    -- solo corre después de cruzar al menos una línea de sector
-    if teleportActive then
-        app.currentSectorTimer = 0
-        app.liveStartClock = nil
-        app.liveSector = nil
-        app.prevSectorTime = CAR.previousSectorTime
-    elseif app.liveStartClock ~= nil then
-        app.currentSectorTimer = now - app.liveStartClock
-    else
-        app.currentSectorTimer = 0
-    end
-
-    if not teleportActive then
-        local lastSector = app.lastFrameSector
-        local currentSector = app.currentSector
-        if lastSector ~= nil and currentSector ~= nil and currentSector ~= lastSector then
-            app.liveStartClock = now
-            app.liveSector = currentSector
-            app.currentSectorTimer = 0
+        -- Timer en vivo del sector actual:
+        -- solo corre después de cruzar al menos una línea de sector
+        if teleportActive then
+                app.currentSectorTimer = 0
+                app.liveStartClock = nil
+                app.liveSector = nil
+                app.prevSectorTime = CAR.previousSectorTime
+                resetGhostPlayback()
+        elseif app.liveStartClock ~= nil then
+                app.currentSectorTimer = now - app.liveStartClock
+        else
+                app.currentSectorTimer = 0
         end
-    end
 
-    app.lastFrameSector = app.currentSector
+        if not teleportActive then
+                local lastSector = app.lastFrameSector
+                local currentSector = app.currentSector
+                if lastSector ~= nil and currentSector ~= nil and currentSector ~= lastSector then
+                        app.liveStartClock = now
+                        app.liveSector = currentSector
+                        app.currentSectorTimer = 0
+                        startSectorRecording(currentSector)
+                        local ghost = app.ghostSectors[currentSector]
+                        if ghost and #ghost > 1 then
+                                local totalMs = app.ghostSectorDuration[currentSector] or 0
+                                if (not totalMs or totalMs <= 0) and appData.sectorsdata.best[currentSector] then
+                                        totalMs = math.floor((appData.sectorsdata.best[currentSector] or 0) * 1000 + 0.5)
+                                end
+                                if totalMs and totalMs > 0 then
+                                        app.ghostPlayback.active = true
+                                        app.ghostPlayback.sector = currentSector
+                                        app.ghostPlayback.timeMs = 0
+                                        app.ghostPlayback.totalMs = totalMs
+                                else
+                                        resetGhostPlayback()
+                                end
+                        else
+                                resetGhostPlayback()
+                        end
+                end
+        end
+
+        recordSectorSample(now)
+
+        if app.ghostPlayback.active and app.ghostPlayback.sector == app.currentSector and app.ghostPlayback.totalMs > 0 then
+                app.ghostPlayback.timeMs = app.ghostPlayback.timeMs + dt * 1000
+                if app.ghostPlayback.timeMs > app.ghostPlayback.totalMs then
+                        app.ghostPlayback.timeMs = app.ghostPlayback.totalMs
+                end
+        end
+
+        app.lastFrameSector = app.currentSector
 
 	if CAR.isInPit then
 		for i in ipairs(appData.sectorsValid) do appData.sectorsValid[i] = true end
@@ -781,35 +1095,37 @@ function script.update(dt)
 			appData.sectorsdata.best[CAR.currentSector+1] = 0
 		end
 
-		-- Vuelta nueva: actualizar último sector
-		if CAR.currentSector == 0 then
-			app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or app.prevSectorTime
-			app.prevSectorTime = app.prevSectorTime / 1000
-			if app.prevSectorTime ~= appData.current_sectors[appData.sector_count] then
-				appData.current_sectors[appData.sector_count] = app.prevSectorTime
-			end
-			if app.currentSectorValid then
-				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
-					or appData.sectorsdata.best[appData.sector_count] == 0 then
-					app.sNotif = "S" .. appData.sector_count .. " " ..
-						string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
-					appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
-					app.saveCarData()
-				end
-			end
-		else
-			app.prevSectorTime = CAR.previousSectorTime / 1000
-			appData.current_sectors[CAR.currentSector] = app.prevSectorTime
-			if app.currentSectorValid then
-				if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
-					or appData.sectorsdata.best[CAR.currentSector] == 0 then
-					app.sNotif = "S" .. CAR.currentSector .. " " ..
-						string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
-					appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
-					app.saveCarData()
-				end
-			end
-		end
+                -- Vuelta nueva: actualizar último sector
+                if CAR.currentSector == 0 then
+                        app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or app.prevSectorTime
+                        app.prevSectorTime = app.prevSectorTime / 1000
+                        if app.prevSectorTime ~= appData.current_sectors[appData.sector_count] then
+                                appData.current_sectors[appData.sector_count] = app.prevSectorTime
+                        end
+                        if app.currentSectorValid then
+                                if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
+                                        or appData.sectorsdata.best[appData.sector_count] == 0 then
+                                        app.sNotif = "S" .. appData.sector_count .. " " ..
+                                                string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
+                                        appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
+                                        app.saveCarData()
+                                        saveSectorGhost(appData.sector_count, app.prevSectorTime)
+                                end
+                        end
+                else
+                        app.prevSectorTime = CAR.previousSectorTime / 1000
+                        appData.current_sectors[CAR.currentSector] = app.prevSectorTime
+                        if app.currentSectorValid then
+                                if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
+                                        or appData.sectorsdata.best[CAR.currentSector] == 0 then
+                                        app.sNotif = "S" .. CAR.currentSector .. " " ..
+                                                string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
+                                        appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
+                                        app.saveCarData()
+                                        saveSectorGhost(CAR.currentSector, app.prevSectorTime)
+                                end
+                        end
+                end
 
 		-- Personal best de vuelta (record tipo CM)
 		if CAR.isLastLapValid and CAR.previousLapTimeMs ~= 0 then
@@ -833,8 +1149,47 @@ function script.update(dt)
                 app.currentSectorValid = true
         end
 end
+
+render.on('main.track.transparent', function ()
+        if not app.userData.settings.showGhost then return end
+
+        local ghost = app.ghostSectors[app.currentSector]
+        if not ghost or #ghost < 2 then return end
+
+        render.setBlendMode(render.BlendMode.AlphaBlend)
+        render.setCullMode(render.CullMode.None)
+        render.setDepthMode(render.DepthMode.ReadOnly)
+
+        for i = 1, #ghost - 1 do
+                render.debugLine(ghost[i], ghost[i + 1], app.ghostColor, app.ghostColor)
+        end
+
+        if app.ghostPlayback and app.ghostPlayback.active and app.ghostPlayback.sector == app.currentSector then
+                local tMs = app.ghostPlayback.timeMs or 0
+                local pos = getGhostPositionAtTime(app.currentSector, tMs)
+                if pos then
+                        local posNext = getGhostPositionAtTime(app.currentSector, tMs + 80)
+
+                        if not posNext then
+                                local totalMs = math.max(app.ghostPlayback.totalMs or 1, 1)
+                                local ghostCount = #ghost
+                                local maxIndex = ghostCount - 1
+                                local t = math.min(math.max(tMs / totalMs, 0), 1)
+                                local fIndex = t * maxIndex
+                                local idx = math.floor(fIndex) + 1
+                                if idx < 1 then idx = 1 end
+                                if idx > ghostCount - 1 then idx = ghostCount - 1 end
+                                posNext = ghost[idx + 1]
+                        end
+
+                        if posNext then
+                                drawGhostCar(pos, posNext, app.ghostColor)
+                        end
+                end
+        end
+end)
 ac.onSessionStart(function(sessionIndex, restarted)
-	if restarted then app.init() end
+        if restarted then app.init() end
 end)
 
 app.init()
