@@ -446,19 +446,22 @@ local function drawGhostCar(pos, nextPos, color)
 end
 
 local function getGhostSegmentColor(input)
-    if not input then return app.ghostColor end
+    if not input then return app.ghostColor or rgbm(0, 1, 0, 0.8) end
 
-    local brake = input.brake or 0
-    local gas = input.gas or 0
-    local alpha = (app.ghostColor and app.ghostColor.a) or 0.7
+    local brake = tonumber(input.brake) or 0
+    local gas = tonumber(input.gas) or 0
+    local alpha = 0.9
+
     if brake > 0.05 then
         local intensity = math.min(math.max(brake, 0), 1)
         return rgbm(0.2 + 0.8 * intensity, 0, 0, alpha)
     end
+
     if gas > 0.05 then
         local intensity = math.min(math.max(gas, 0), 1)
         return rgbm(0, 0.5 + 0.5 * intensity, 0, alpha)
     end
+
     return rgbm(0.6, 0.6, 0.2, alpha)
 end
 
@@ -1196,7 +1199,15 @@ render.on('main.track.transparent', function ()
         render.setDepthMode(render.DepthMode.ReadOnly)
 
         for i = 1, #ghost - 1 do
-                local color = getGhostSegmentColor(ghostInputs and ghostInputs[i])
+                local color = app.ghostColor
+
+                if ghostInputs and ghostInputs[i] then
+                        local ok, c = pcall(getGhostSegmentColor, ghostInputs[i])
+                        if ok and c then
+                                color = c
+                        end
+                end
+
                 render.debugLine(ghost[i], ghost[i + 1], color, color)
         end
 
