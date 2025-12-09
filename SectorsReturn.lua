@@ -49,6 +49,7 @@ local app = {
                 },
         },
         ghostSectors = {},
+        ghostInputs = {},
         ghostColor = rgbm(0.8, 0.4, 1, 0.7),
         ghostSectorDuration = {},
         ghostPlayback = { active = false, sector = nil, timeMs = 0, totalMs = 0 },
@@ -323,12 +324,14 @@ local function parseMeasureEntry(entry)
     if type(entry) ~= 'table' then return nil end
     local pos = entry[1] or entry.pos or entry.spline or entry.progress
     local time = entry[2] or entry.time
+    local gas = entry.gas or entry[3]
+    local brake = entry.brake or entry[4]
     if pos == nil or time == nil then return nil end
-    return {pos = pos, time = time}
+    return {pos = pos, time = time, gas = gas, brake = brake}
 end
 
 local function buildInterpolatedGhost(measure)
-    if type(measure) ~= 'table' then return {} end
+    if type(measure) ~= 'table' then return {}, {} end
 
     local cleaned = {}
     for _, v in ipairs(measure) do
@@ -336,9 +339,17 @@ local function buildInterpolatedGhost(measure)
         if parsed then cleaned[#cleaned + 1] = parsed end
     end
     table.sort(cleaned, function(a, b) return a.time < b.time end)
-    if #cleaned < 2 then return {} end
+    if #cleaned < 2 then return {}, {} end
+
+    local function lerpOptional(a, b, k)
+        if a == nil and b == nil then return nil end
+        if a == nil then return b end
+        if b == nil then return a end
+        return a + (b - a) * k
+    end
 
     local points = {}
+    local inputs = {}
     local stepMs = 50
     local totalTime = cleaned[#cleaned].time
     local idx = 1
@@ -356,10 +367,15 @@ local function buildInterpolatedGhost(measure)
         local pos = a.pos + (b.pos - a.pos) * k
         local worldPos = ac.trackProgressToWorldCoordinate(pos % 1)
         points[#points + 1] = worldPos
+        inputs[#inputs + 1] = {
+            gas = lerpOptional(a.gas, b.gas, k),
+            brake = lerpOptional(a.brake, b.brake, k)
+        }
     end
 
     points[#points + 1] = ac.trackProgressToWorldCoordinate(cleaned[#cleaned].pos % 1)
-    return points
+    inputs[#inputs + 1] = { gas = cleaned[#cleaned].gas, brake = cleaned[#cleaned].brake }
+    return points, inputs
 end
 
 local function getMeasureDurationMs(measure)
@@ -413,23 +429,37 @@ local function drawGhostCar(pos, nextPos, color)
         right = right / rightLen
     end
 
-    local halfLength = 1.8
-    local halfWidth = 0.6
+    local arrowColor = rgbm(0.1, 1.0, 0.1, 1.0)
+    local arrowLength = 2.4
+    local baseOffset = 0.8
+    local halfWidth = 0.8
 
-    local frontCenter = pos + forward * halfLength
-    local backCenter = pos - forward * halfLength
+    local tip = pos + forward * arrowLength
+    local baseCenter = pos - forward * baseOffset
+    local left = baseCenter + right * halfWidth
+    local rightPt = baseCenter - right * halfWidth
 
-    local lf = frontCenter + right * halfWidth
-    local rf = frontCenter - right * halfWidth
-    local lb = backCenter + right * halfWidth
-    local rb = backCenter - right * halfWidth
+    render.debugLine(left, tip, arrowColor, arrowColor)
+    render.debugLine(rightPt, tip, arrowColor, arrowColor)
+    render.debugLine(left, rightPt, arrowColor, arrowColor)
+    render.debugLine(pos, tip, arrowColor, arrowColor)
+end
 
-    render.debugLine(lf, rf, color, color)
-    render.debugLine(rf, rb, color, color)
-    render.debugLine(rb, lb, color, color)
-    render.debugLine(lb, lf, color, color)
+local function getGhostSegmentColor(input)
+    if not input then return app.ghostColor end
 
-    render.debugLine(frontCenter, frontCenter + forward * 0.5, color, color)
+    local brake = input.brake or 0
+    local gas = input.gas or 0
+    local alpha = (app.ghostColor and app.ghostColor.a) or 0.7
+    if brake > 0.05 then
+        local intensity = math.min(math.max(brake, 0), 1)
+        return rgbm(0.2 + 0.8 * intensity, 0, 0, alpha)
+    end
+    if gas > 0.05 then
+        local intensity = math.min(math.max(gas, 0), 1)
+        return rgbm(0, 0.5 + 0.5 * intensity, 0, alpha)
+    end
+    return rgbm(0.6, 0.6, 0.2, alpha)
 end
 
 function resetGhostPlayback()
@@ -441,6 +471,7 @@ end
 
 app.loadSectorGhosts = function()
     app.ghostSectors = {}
+    app.ghostInputs = {}
     app.ghostSectorDuration = {}
     if not SectorRecord then return end
 
@@ -455,9 +486,10 @@ app.loadSectorGhosts = function()
             local finishingPoint = record.finishingPoint or (record.data and record.data.finishingPoint)
             local sectorIndex = getSectorIndexForProgress(finishingPoint)
             if sectorIndex and measure then
-                local ghostPoints = buildInterpolatedGhost(measure)
+                local ghostPoints, ghostInputs = buildInterpolatedGhost(measure)
                 if #ghostPoints > 1 then
                     app.ghostSectors[sectorIndex] = ghostPoints
+                    app.ghostInputs[sectorIndex] = ghostInputs
                     app.ghostSectorDuration[sectorIndex] = getMeasureDurationMs(measure)
                 end
             end
@@ -482,7 +514,7 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
     for _, v in ipairs(measure) do
         local parsed = parseMeasureEntry(v)
         if parsed then
-            measureSorted[#measureSorted + 1] = {parsed.pos, parsed.time}
+            measureSorted[#measureSorted + 1] = {parsed.pos, parsed.time, gas = parsed.gas, brake = parsed.brake}
         end
     end
     table.sort(measureSorted, function(a, b) return (a[2] or 0) < (b[2] or 0) end)
@@ -494,9 +526,10 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
         measureSorted[#measureSorted + 1] = {finishingPoint, totalMs}
     end
 
-    local ghostPoints = buildInterpolatedGhost(measureSorted)
+    local ghostPoints, ghostInputs = buildInterpolatedGhost(measureSorted)
     if #ghostPoints > 1 then
         app.ghostSectors[sectorIndex] = ghostPoints
+        app.ghostInputs[sectorIndex] = ghostInputs
         app.ghostSectorDuration[sectorIndex] = totalMs
     end
 
@@ -513,12 +546,13 @@ local function saveSectorGhost(sectorIndex, sectorTimeSec)
     end)
     if #ghostPoints > 1 then
         app.ghostSectors[sectorIndex] = ghostPoints
+        app.ghostInputs[sectorIndex] = ghostInputs
     end
 end
 
 local function startSectorRecording(sectorIndex)
     if not sectorIndex then return end
-    app.currentRunMeasure[sectorIndex] = { {CAR.splinePosition, 0} }
+    app.currentRunMeasure[sectorIndex] = { {CAR.splinePosition, 0, gas = CAR.gas, brake = CAR.brake} }
     app.currentRunStartState[sectorIndex] = nil
     app.currentRunSector = sectorIndex
     if SectorRecord then
@@ -540,7 +574,7 @@ local function recordSectorSample(now)
     local last = measure[#measure]
     local lastTime = last and (last[2] or last.time) or -1
     if elapsedMs > lastTime then
-        measure[#measure + 1] = {CAR.splinePosition, elapsedMs}
+        measure[#measure + 1] = {CAR.splinePosition, elapsedMs, gas = CAR.gas, brake = CAR.brake}
     end
 end
 
@@ -1154,6 +1188,7 @@ render.on('main.track.transparent', function ()
         if not app.userData.settings.showGhost then return end
 
         local ghost = app.ghostSectors[app.currentSector]
+        local ghostInputs = app.ghostInputs and app.ghostInputs[app.currentSector] or nil
         if not ghost or #ghost < 2 then return end
 
         render.setBlendMode(render.BlendMode.AlphaBlend)
@@ -1161,7 +1196,8 @@ render.on('main.track.transparent', function ()
         render.setDepthMode(render.DepthMode.ReadOnly)
 
         for i = 1, #ghost - 1 do
-                render.debugLine(ghost[i], ghost[i + 1], app.ghostColor, app.ghostColor)
+                local color = getGhostSegmentColor(ghostInputs and ghostInputs[i])
+                render.debugLine(ghost[i], ghost[i + 1], color, color)
         end
 
         if app.ghostPlayback and app.ghostPlayback.active and app.ghostPlayback.sector == app.currentSector then
