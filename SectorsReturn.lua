@@ -901,37 +901,58 @@ end
 end
 x = basex + (j-1)*mSectorWidth
 local lineStart = vec2(x+1, basey)
-local lineEnd = vec2(x+mSectorWidth, basey)
+local lineEnd = vec2(x + mSectorWidth - 1, basey)
 if i == app.currentSector and j == appData.mSectorsCheck.current then
 ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 12)
-end
-ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
+                end
+                ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
 
 local hitPos = vec2(x+1, basey - 4)
 ui.setCursor(hitPos)
-if ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(mSectorWidth, 8)) then
-end
+        if ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(mSectorWidth, 8)) then
+        end
 
-if ui.itemHovered() then
-local currentText = hasCurrent and app.time_to_string(current) or "--.---"
-local bestText = hasBest and app.time_to_string(best) or "--.---"
+        if ui.itemHovered() then
+                local currentText = hasCurrent and app.time_to_string(current) or "--.---"
+                local bestText = hasBest and app.time_to_string(best) or "--.---"
 
-local deltaText = ""
-if hasBest and hasCurrent then
-local delta = current - best
-local sign = delta >= 0 and "+" or ""
-deltaText = string.format("  Δ: %s%.3f", sign, delta)
-end
+                local sumCurrent = 0
+                if appData.mSectors[i] then
+                        for k = 1, 8 do
+                                local v = appData.mSectors[i][k]
+                                if v and v > 0 then sumCurrent = sumCurrent + v end
+                        end
+                end
 
-local tooltip = string.format(
-"Sector S%d micro %d\nActual: %s%s\nBest:   %s",
-i, j,
-currentText,
-deltaText,
-bestText
-)
-ui.setTooltip(tooltip)
-end
+                local sumLast = 0
+                if appData.mSectorsLast[i] then
+                        for k = 1, 8 do
+                                local v = appData.mSectorsLast[i][k]
+                                if v and v > 0 then sumLast = sumLast + v end
+                        end
+                end
+
+                local sumCurrentText = sumCurrent > 0 and app.time_to_string(sumCurrent) or "--.---"
+                local sumLastText = sumLast > 0 and app.time_to_string(sumLast) or "--.---"
+
+                local deltaText = ""
+                if hasBest and hasCurrent then
+                        local delta = current - best
+                        local sign = delta >= 0 and "+" or ""
+                        deltaText = string.format("  Δ: %s%.3f", sign, delta)
+                end
+
+                local tooltip = string.format(
+"Sector S%d micro %d\nActual: %s%s\nBest:   %s\n\nSum curr micros: %s\nSum last micros: %s",
+ i, j,
+ currentText,
+ deltaText,
+ bestText,
+ sumCurrentText,
+ sumLastText
+ )
+                ui.setTooltip(tooltip)
+        end
 end
 
 -- Línea divisoria vertical
@@ -1386,8 +1407,6 @@ function script.update(dt)
                 app.teleportCooldownUntil = nil
         end
 
-        local sectorStartedThisFrame = false
-
         -- Capturar estado si cambiamos de sector (deshabilitado por ahora)
         --if not app.teleporting and not SIM.isReplayActive then
         --    checkSectorChangeAndCapture()
@@ -1416,7 +1435,6 @@ function script.update(dt)
                         local prevMicro = appData.mSectorsCheck.current
                         finalizeCurrentMicroTime(lastSector, now, prevMicro)
                         startLiveTiming(currentSector, now, true)
-                        sectorStartedThisFrame = true
                 end
         end
 
@@ -1445,19 +1463,6 @@ function script.update(dt)
         -- Actualización de tiempos de sector y best (basado en app original),
         -- ignorando cambios provocados por teleports
         if not teleportActive and not inPit and app.prevSectorTime ~= CAR.previousSectorTime then
-                local targetSector = app.currentSector
-                if not sectorStartedThisFrame then
-                        local lastSector = app.lastFrameSector
-                        if targetSector == lastSector and lastSector then
-                                targetSector = ((lastSector % appData.sector_count) + 1)
-                        end
-                        targetSector = targetSector or (((CAR.currentSector + 1) <= appData.sector_count) and (CAR.currentSector + 1) or 1)
-
-                        if targetSector and app.liveSector ~= targetSector then
-                                startLiveTiming(targetSector, now, false)
-                                sectorStartedThisFrame = true
-                        end
-                end
                 -- AC referencia splits desde 0, tablas Lua desde 1
                 app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or CAR.previousSectorTime
                 if appData.sectorsdata.best[CAR.currentSector+1] == nil then
