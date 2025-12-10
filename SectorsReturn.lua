@@ -718,7 +718,22 @@ local function recordSectorSample(now)
     end
 end
 
-local function startLiveTiming(sectorIndex, now)
+local function resetMicroSectorState(sectorIndex, nowClock)
+        if not sectorIndex then return end
+
+        local clock = nowClock or os.preciseClock()
+        appData.mSectorsCheck.current = 1
+        appData.mSectorsCheck.isValid = true
+        appData.mSectorsCheck.startTime = clock
+
+        if appData.mSectors[sectorIndex] then
+                for j = 1, 8 do
+                        appData.mSectors[sectorIndex][j] = 0
+                end
+        end
+end
+
+local function startLiveTiming(sectorIndex, now, resetMicro)
         if not sectorIndex or CAR.isInPit then return end
 
         local nowClock = now or os.preciseClock()
@@ -726,14 +741,8 @@ local function startLiveTiming(sectorIndex, now)
         app.liveSector = sectorIndex
         app.currentSectorTimer = 0
 
-        -- Reiniciar micro-sectores al comenzar un sector en conducción normal
-        appData.mSectorsCheck.current = 1
-        appData.mSectorsCheck.isValid = true
-        appData.mSectorsCheck.startTime = nowClock
-        if appData.mSectors[sectorIndex] then
-                for j = 1, 8 do
-                        appData.mSectors[sectorIndex][j] = 0
-                end
+        if resetMicro then
+                resetMicroSectorState(sectorIndex, nowClock)
         end
 
         startSectorRecording(sectorIndex)
@@ -1370,7 +1379,7 @@ function script.update(dt)
                 local currentSector = app.currentSector
                 if lastSector and currentSector and currentSector ~= lastSector then
                         finalizeCurrentMicroTime(lastSector, now)
-                        startLiveTiming(currentSector, now)
+                        startLiveTiming(currentSector, now, true)
                         sectorStartedThisFrame = true
                 end
         end
@@ -1400,10 +1409,15 @@ function script.update(dt)
         -- Actualización de tiempos de sector y best (basado en app original),
         -- ignorando cambios provocados por teleports
         if not teleportActive and not inPit and app.prevSectorTime ~= CAR.previousSectorTime then
-                local targetSector = app.getCurrentSector()
+                local targetSector = app.currentSector
                 if not sectorStartedThisFrame then
+                        local lastSector = app.lastFrameSector
+                        if targetSector == lastSector and lastSector then
+                                targetSector = ((lastSector % appData.sector_count) + 1)
+                        end
                         targetSector = targetSector or (((CAR.currentSector + 1) <= appData.sector_count) and (CAR.currentSector + 1) or 1)
-                        startLiveTiming(targetSector, now)
+                        resetMicroSectorState(targetSector, now)
+                        startLiveTiming(targetSector, now, false)
                         sectorStartedThisFrame = true
                 end
                 -- AC referencia splits desde 0, tablas Lua desde 1
