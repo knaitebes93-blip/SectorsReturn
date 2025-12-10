@@ -839,104 +839,131 @@ local MS_COLOR_HIGHLIGHT = app.colors.WHITE
 
 --- Dibuja las barras de micro-sectores y AHORA TAMBIÉN LOS BOTONES
 local function drawmSectors(dt)
-        local mSectorWidth = app.uiDecay / 8
-        local basey = 104
-        local basex = 35
-	
-    -- Línea gris superior
-    ui.drawSimpleLine(vec2(basex, basey-9), vec2(basex, basey+9), app.colors.GREY, 1)
+local mSectorWidth = app.uiDecay / 8
+local basey = 104
+local basex = 35
 
-        local x
-        for i=1, appData.sector_count do
-                basex = app.uiDecay * (i-1) + 35
-                ui.pushID(i)
-        -- Dibujar barras de microsectores
-        for j=1, 8 do
-                        local best = appData.sectorsdata.microBest[i] and appData.sectorsdata.microBest[i][j]
-                        local last = appData.mSectorsLast[i] and appData.mSectorsLast[i][j]
-                        local current = appData.mSectors[i][j]
-                        local hasBest = best ~= nil and best > 0
-                        local hasLast = last ~= nil and last > 0
-                        local deltaBest = hasBest and (current - best) or nil
-                        local sectorIsInvalid = appData.sectorsValid[i] == false
+-- Línea gris superior
+ui.drawSimpleLine(vec2(basex, basey-9), vec2(basex, basey+9), app.colors.GREY, 1)
 
-                        local baseColor
-                        if not hasBest or sectorIsInvalid then
-                                baseColor = MS_COLOR_GRAY
-                        elseif current < best then
-                                baseColor = MS_COLOR_BEST
-                        elseif hasLast and current < last then
-                                baseColor = MS_COLOR_GREEN
-                        elseif deltaBest ~= nil and deltaBest < MICRO_DELTA_SMALL then
-                                baseColor = MS_COLOR_ORANGE
-                        else
-                                baseColor = MS_COLOR_RED
-                        end
-                        x = basex + (j-1)*mSectorWidth
-                        local lineStart = vec2(x+1, basey)
-                        local lineEnd = vec2(x+mSectorWidth, basey)
-                        if i == app.currentSector and j == appData.mSectorsCheck.current then
-                                ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 10)
-                        end
-                        ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
-                end
-        
-        -- Línea divisoria vertical
-		ui.drawSimpleLine(vec2(basex + app.uiDecay, basey-90), vec2(basex + app.uiDecay, basey+9), app.colors.GREY, 1)
+local x
+for i=1, appData.sector_count do
+basex = app.uiDecay * (i-1) + 35
+ui.pushID(i)
+-- Dibujar barras de microsectores
+for j=1, 8 do
+local best = appData.sectorsdata.microBest[i] and appData.sectorsdata.microBest[i][j]
+local last = appData.mSectorsLast[i] and appData.mSectorsLast[i][j]
+local current = appData.mSectors[i][j]
+local hasBest = best ~= nil and best > 0
+local hasLast = last ~= nil and last > 0
+local hasCurrent = current ~= nil and current > 0
+local deltaBest = hasBest and hasCurrent and (current - best) or nil
+local sectorIsInvalid = appData.sectorsValid[i] == false
 
-        -- Etiqueta del Sector (S1, S2...)
-		ui.sameLine(basex + app.uiDecay - 20)
-		if appData.sectorsValid[i] then
-			ui.dwriteText("S"..i, 14, app.colors.GREEN)
-		else
-			ui.dwriteText("S"..i, 14, app.colors.ORANGE)
-		end
-		
-		
-                -- === BOTÓN DE GUARDAR PUNTO DE RETORNO ===
-        local savePos = vec2(basex + app.uiDecay - 70, basey + 8)
-        ui.setCursor(savePos)
-        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.9, 0.9, 0.3, 1))  -- color “amarillo”
-        if ui.iconButton(ui.Icons.Save, vec2(18, 18)) then
-            app.saveSectorState(i)
-        end
-        ui.popStyleColor()
+local baseColor
+if not hasBest or not hasCurrent or sectorIsInvalid then
+baseColor = MS_COLOR_GRAY
+elseif current < best then
+baseColor = MS_COLOR_BEST
+elseif hasLast and current < last then
+baseColor = MS_COLOR_GREEN
+elseif deltaBest ~= nil and deltaBest < MICRO_DELTA_SMALL then
+baseColor = MS_COLOR_ORANGE
+else
+baseColor = MS_COLOR_RED
+end
+x = basex + (j-1)*mSectorWidth
+local lineStart = vec2(x+1, basey)
+local lineEnd = vec2(x+mSectorWidth, basey)
+if i == app.currentSector and j == appData.mSectorsCheck.current then
+ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 10)
+end
+ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
 
-        if ui.itemHovered() then
-            ui.setTooltip("Guardar punto de retorno para Sector "..i.." desde la posición actual")
-        end
+local hitPos = vec2(x+1, basey - 4)
+ui.setCursor(hitPos)
+if ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(mSectorWidth, 8)) then
+end
 
-        -- === BOTÓN DE RETORNO (igual que antes) ===
-        local btnPos = vec2(basex + app.uiDecay - 45, basey + 8)
-        ui.setCursor(btnPos)
+if ui.itemHovered() then
+local currentText = hasCurrent and app.time_to_string(current) or "--.---"
+local bestText = hasBest and app.time_to_string(best) or "--.---"
 
-        local hasState = app.sectorStates[i] ~= nil
-        local btnColor = hasState and rgbm(0, 1, 0, 1) or rgbm(1, 1, 1, 0.2)
+local deltaText = ""
+if hasBest and hasCurrent then
+local delta = current - best
+local sign = delta >= 0 and "+" or ""
+deltaText = string.format("  Δ: %s%.3f", sign, delta)
+end
 
-        ui.pushStyleColor(ui.StyleColor.Text, btnColor)
-        if ui.iconButton(ui.Icons.Restart, vec2(18, 18)) then
-             if hasState then
-                 app.teleportToSector(i)
-             else
-                 ui.toast(ui.Icons.Warning, "Todavía no guardaste el punto de retorno del Sector "..i)
-             end
-        end
-        ui.popStyleColor()
+local tooltip = string.format(
+"Sector S%d micro %d\nActual: %s%s\nBest:   %s",
+i, j,
+currentText,
+deltaText,
+bestText
+)
+ui.setTooltip(tooltip)
+end
+end
+
+-- Línea divisoria vertical
+ui.drawSimpleLine(vec2(basex + app.uiDecay, basey-90), vec2(basex + app.uiDecay, basey+9), app.colors.GREY, 1)
+
+-- Etiqueta del Sector (S1, S2...)
+ui.sameLine(basex + app.uiDecay - 20)
+if appData.sectorsValid[i] then
+ui.dwriteText("S"..i, 14, app.colors.GREEN)
+else
+ui.dwriteText("S"..i, 14, app.colors.ORANGE)
+end
 
 
-        if ui.itemHovered() then
-            if hasState then
-                ui.setTooltip("Reiniciar Sector "..i)
-            else
-                ui.setTooltip("Punto de retorno no guardado aún.\nPasa por este sector para activarlo.")
-            end
-        end
+-- === BOTÓN DE GUARDAR PUNTO DE RETORNO ===
+local savePos = vec2(basex + app.uiDecay - 70, basey + 8)
+ui.setCursor(savePos)
+ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.9, 0.9, 0.3, 1))  -- color “amarillo”
+if ui.iconButton(ui.Icons.Save, vec2(18, 18)) then
+app.saveSectorState(i)
+end
+ui.popStyleColor()
 
-                ui.popID()
-        end
+if ui.itemHovered() then
+ui.setTooltip("Guardar punto de retorno para Sector "..i.." desde la posición actual")
+end
 
-    -- Línea inferior
-        ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
+-- === BOTÓN DE RETORNO (igual que antes) ===
+local btnPos = vec2(basex + app.uiDecay - 45, basey + 8)
+ui.setCursor(btnPos)
+
+local hasState = app.sectorStates[i] ~= nil
+local btnColor = hasState and rgbm(0, 1, 0, 1) or rgbm(1, 1, 1, 0.2)
+
+ui.pushStyleColor(ui.StyleColor.Text, btnColor)
+if ui.iconButton(ui.Icons.Restart, vec2(18, 18)) then
+if hasState then
+app.teleportToSector(i)
+else
+ui.toast(ui.Icons.Warning, "Todavía no guardaste el punto de retorno del Sector "..i)
+end
+end
+ui.popStyleColor()
+
+
+if ui.itemHovered() then
+if hasState then
+ui.setTooltip("Reiniciar Sector "..i)
+else
+ui.setTooltip("Punto de retorno no guardado aún.\nPasa por este sector para activarlo.")
+end
+end
+
+ui.popID()
+end
+
+-- Línea inferior
+ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
 end
 
 local function idealSectorTimeAtCurrentPos(sectorIndex)
