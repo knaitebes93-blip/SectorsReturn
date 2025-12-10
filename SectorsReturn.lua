@@ -726,6 +726,16 @@ local function startLiveTiming(sectorIndex, now)
         app.liveSector = sectorIndex
         app.currentSectorTimer = 0
 
+        -- Reiniciar micro-sectores al comenzar un sector en conducción normal
+        appData.mSectorsCheck.current = 1
+        appData.mSectorsCheck.isValid = true
+        appData.mSectorsCheck.startTime = nowClock
+        if appData.mSectors[sectorIndex] then
+                for j = 1, 8 do
+                        appData.mSectors[sectorIndex][j] = 0
+                end
+        end
+
         startSectorRecording(sectorIndex)
 
         local ghost = app.ghostSectors[sectorIndex]
@@ -855,9 +865,10 @@ for j=1, 8 do
 local best = appData.sectorsdata.microBest[i] and appData.sectorsdata.microBest[i][j]
 local last = appData.mSectorsLast[i] and appData.mSectorsLast[i][j]
 local current = appData.mSectors[i][j]
+local isActiveMicro = i == app.currentSector and j == appData.mSectorsCheck.current
 local hasBest = best ~= nil and best > 0
 local hasLast = last ~= nil and last > 0
-local hasCurrent = current ~= nil and current > 0
+local hasCurrent = current ~= nil and current > 0 and not isActiveMicro
 local deltaBest = hasBest and hasCurrent and (current - best) or nil
 local sectorIsInvalid = appData.sectorsValid[i] == false
 
@@ -1213,6 +1224,34 @@ local function isOutside()
         end
 end
 
+local function storeMicroTime(sectorIndex, microIndex, duration)
+        if not sectorIndex or not microIndex or not duration then return end
+
+        appData.mSectors[sectorIndex] = appData.mSectors[sectorIndex] or {}
+        appData.mSectorsisBest[sectorIndex] = appData.mSectorsisBest[sectorIndex] or {}
+
+        local bestMicro = appData.sectorsdata.microBest[sectorIndex] and appData.sectorsdata.microBest[sectorIndex][microIndex]
+        if appData.mSectorsCheck.isValid and bestMicro and bestMicro > 0 and duration < bestMicro then
+                appData.mSectorsisBest[sectorIndex][microIndex] = 1
+        else
+                appData.mSectorsisBest[sectorIndex][microIndex] = 0
+        end
+
+        appData.mSectors[sectorIndex][microIndex] = duration
+end
+
+local function finalizeCurrentMicroTime(sectorIndex, nowClock)
+        if not sectorIndex then return end
+
+        local prevIndex = appData.mSectorsCheck.current
+        if not prevIndex or prevIndex < 1 or prevIndex > 8 then return end
+
+        if not appData.mSectorsCheck.startTime or appData.mSectorsCheck.startTime <= 0 then return end
+
+        local duration = (nowClock or os.preciseClock()) - appData.mSectorsCheck.startTime
+        storeMicroTime(sectorIndex, prevIndex, duration)
+end
+
 local function mSectorsStep(currentSector)
         local splnPos = CAR.splinePosition
         local sectorStartPos = appData.sectors[currentSector]
@@ -1220,17 +1259,16 @@ local function mSectorsStep(currentSector)
         local width = math.abs((sectorEndPos-sectorStartPos)/8)
         for i=0, 7 do
                 if splnPos >= (sectorStartPos + i*width) and splnPos < (sectorStartPos + (i+1)*width) then
-                        if i+1 ~= appData.mSectorsCheck.current then
-                                local t = os.preciseClock() - appData.mSectorsCheck.startTime
-                                local bestMicro = appData.sectorsdata.microBest[currentSector] and appData.sectorsdata.microBest[currentSector][i+1]
-                                if appData.mSectorsCheck.isValid and bestMicro and bestMicro > 0 and t < bestMicro then
-                                        appData.mSectorsisBest[currentSector][i+1] = 1
-                                else
-                                        appData.mSectorsisBest[currentSector][i+1] = 0
+                        local newIndex = i+1
+                        if newIndex ~= appData.mSectorsCheck.current then
+                                local nowClock = os.preciseClock()
+                                local prevIndex = appData.mSectorsCheck.current
+                                if prevIndex >= 1 and prevIndex <= 8 and appData.mSectorsCheck.startTime > 0 then
+                                        local t = nowClock - appData.mSectorsCheck.startTime
+                                        storeMicroTime(currentSector, prevIndex, t)
                                 end
-                                appData.mSectors[currentSector][i+1] = t
-                                appData.mSectorsCheck.startTime = os.preciseClock()
-                                appData.mSectorsCheck.current = i+1
+                                appData.mSectorsCheck.startTime = nowClock
+                                appData.mSectorsCheck.current = newIndex
                                 appData.mSectorsCheck.isValid = true
                         end
                 end
@@ -1331,6 +1369,7 @@ function script.update(dt)
                 local lastSector = app.lastFrameSector
                 local currentSector = app.currentSector
                 if lastSector and currentSector and currentSector ~= lastSector then
+                        finalizeCurrentMicroTime(lastSector, now)
                         startLiveTiming(currentSector, now)
                         sectorStartedThisFrame = true
                 end
