@@ -989,7 +989,11 @@ function script.main(dt)
                 ui.sameLine(i * app.uiDecay - 70, 0)
 
                 local timeNow = (i == app.liveSector) and app.currentSectorTimer or 0
-                ui.dwriteText(app.time_to_string(timeNow), tSize, app.colors.CYAN)
+                local timeStr = app.time_to_string(timeNow)
+                if i == app.liveSector and timeNow > 0 and appData.sectorsValid[i] == false then
+                        timeStr = timeStr .. "*"
+                end
+                ui.dwriteText(timeStr, tSize, app.colors.CYAN)
 
                 -- Delta respecto al BEST del sector
                 ui.sameLine(i * app.uiDecay - 17, 0)
@@ -1017,11 +1021,16 @@ function script.main(dt)
         ui.dwriteText("Last", tSize)
 	for i=1, appData.sector_count do
 		ui.sameLine(i*app.uiDecay - 70, 0)
-		if app.currentSector == i then
-			ui.dwriteTextHyperlink(app.time_to_string(appData.current_sectors[i]), tSize, app.colors.WHITE)
-		else
-			ui.dwriteText(app.time_to_string(appData.current_sectors[i]), tSize)
-		end
+                local lastTime = appData.current_sectors[i]
+                local lastStr = app.time_to_string(lastTime)
+                if lastTime > 0 and appData.sectorsValid[i] == false then
+                        lastStr = lastStr .. "*"
+                end
+                if app.currentSector == i then
+                        ui.dwriteTextHyperlink(lastStr, tSize, app.colors.WHITE)
+                else
+                        ui.dwriteText(lastStr, tSize)
+                end
 
                 color = app.colors.GREY
                 if appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 or appData.sectorsdata.best[i] == nil or appData.sectorsdata.best[i] == 0 then
