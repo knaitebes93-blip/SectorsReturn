@@ -835,7 +835,7 @@ local MS_COLOR_GREEN = app.colors.GREEN
 local MS_COLOR_ORANGE = app.colors.ORANGE
 local MS_COLOR_RED = app.colors.RED
 local MS_COLOR_GRAY = app.colors.MID_GREY
-local MS_COLOR_HIGHLIGHT = app.colors.WHITE
+local MS_COLOR_HIGHLIGHT = app.colors.CYAN
 
 --- Dibuja las barras de micro-sectores y AHORA TAMBIÉN LOS BOTONES
 local function drawmSectors(dt)
@@ -877,7 +877,7 @@ x = basex + (j-1)*mSectorWidth
 local lineStart = vec2(x+1, basey)
 local lineEnd = vec2(x+mSectorWidth, basey)
 if i == app.currentSector and j == appData.mSectorsCheck.current then
-ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 10)
+ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 12)
 end
 ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
 
@@ -912,11 +912,13 @@ end
 ui.drawSimpleLine(vec2(basex + app.uiDecay, basey-90), vec2(basex + app.uiDecay, basey+9), app.colors.GREY, 1)
 
 -- Etiqueta del Sector (S1, S2...)
-ui.sameLine(basex + app.uiDecay - 20)
+
+local labelPos = vec2(basex + app.uiDecay - 20, basey + 8)  -- ajustá el 24 a gusto
+ui.setCursor(labelPos)
 if appData.sectorsValid[i] then
-ui.dwriteText("S"..i, 14, app.colors.GREEN)
+ui.dwriteText("S"..i, 15, app.colors.GREEN)
 else
-ui.dwriteText("S"..i, 14, app.colors.ORANGE)
+ui.dwriteText("S"..i, 15, app.colors.ORANGE)
 end
 
 
@@ -1188,7 +1190,7 @@ function script.main(dt)
 
         local ghost = app.ghostSectors[app.currentSector]
         ui.offsetCursor(vec2(-10, 4))
-        ui.dwriteText(string.format('Ghost S%d: %d pts', app.currentSector, ghost and #ghost or 0), 10, app.colors.GREY)
+        --ui.dwriteText(string.format('Ghost S%d: %d pts', app.currentSector, ghost and #ghost or 0), 10, app.colors.GREY)
 
         ui.popDWriteFont()
 end
