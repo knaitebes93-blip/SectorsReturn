@@ -85,16 +85,17 @@ app.getTrackSectors = function()
 end
 
 local appData = {
-	prevLapCount = -1,
-	sector_count = #app.getTrackSectors(),
-	sectors = app.getTrackSectors(),
-	current_sectors = {},
-	sectorsValid = {},
-	sectorsdata = {
-		best = {},
-		target = {},
-	},
-	pb = false
+        prevLapCount = -1,
+        sector_count = #app.getTrackSectors(),
+        sectors = app.getTrackSectors(),
+        current_sectors = {},
+        sectorsValid = {},
+        sectorsdata = {
+                best = {},
+                target = {},
+                microBest = {},
+        },
+        pb = false
 }
 
 --- Inicializar micro sectores
@@ -145,10 +146,10 @@ end
 
 
 app.saveCarData = function(carId)
-	if not carId then carId = ac.getCarID() end
-	local filePath = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\"..carId..".json"
-	app.userData.data[TRACK] = appData.sectorsdata
-	local carJson = JSON.stringify(app.userData.data, {pretty=true})
+        if not carId then carId = ac.getCarID() end
+        local filePath = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\"..carId..".json"
+        app.userData.data[TRACK] = appData.sectorsdata
+        local carJson = JSON.stringify(app.userData.data, {pretty=true})
 	io.saveAsync(filePath, carJson)
 end
 
@@ -163,9 +164,9 @@ app.loadCarData = function(carId)
 		if sectorsdata then
 			appData.sectorsdata = sectorsdata
 		end
-	else
-		app.userData.data[TRACK] = { best = {}, target = {} }
-	end
+        else
+                app.userData.data[TRACK] = { best = {}, target = {}, microBest = {} }
+        end
 end
 
 app.checkOldSettings = function()
@@ -248,15 +249,17 @@ app.savePersonalBest = function(lapTimeMs)
 end
 
 app.init = function()
-	app.checkOldSettings()
-	app.loadSettings()
-	app.loadCarData()
-	for i=1, appData.sector_count do
-		appData.current_sectors[i] = 0
-		appData.sectorsdata.best[i] = appData.sectorsdata.best[i] or 0
-		appData.sectorsdata.target[i] = appData.sectorsdata.target[i] or 0
-		appData.sectorsValid[i] = true
-	end
+        app.checkOldSettings()
+        app.loadSettings()
+        app.loadCarData()
+        appData.sectorsdata.microBest = appData.sectorsdata.microBest or {}
+        for i=1, appData.sector_count do
+                appData.current_sectors[i] = 0
+                appData.sectorsdata.best[i] = appData.sectorsdata.best[i] or 0
+                appData.sectorsdata.target[i] = appData.sectorsdata.target[i] or 0
+                appData.sectorsdata.microBest[i] = appData.sectorsdata.microBest[i] or {}
+                appData.sectorsValid[i] = true
+        end
     app.loadPersonalBest()
     app.set_microSectors()
     if SIM.allowedTyresOut > -1 then app.allowedTyresOut = app.userData.settings.allowedTyresOut end
@@ -1140,26 +1143,27 @@ local function isOutside()
 end
 
 local function mSectorsStep(currentSector)
-	local splnPos = CAR.splinePosition
-	local sectorStartPos = appData.sectors[currentSector]
-	local sectorEndPos = currentSector < appData.sector_count and appData.sectors[currentSector+1] or 1
-	local width = math.abs((sectorEndPos-sectorStartPos)/8)
-	for i=0, 7 do
-		if splnPos >= (sectorStartPos + i*width) and splnPos < (sectorStartPos + (i+1)*width) then
-			if i+1 ~= appData.mSectorsCheck.current then
-				local t = os.preciseClock() - appData.mSectorsCheck.startTime
-				if appData.mSectorsCheck.isValid and (t < appData.mSectors[currentSector][i+1] or appData.mSectors[currentSector][i+1] == 0) then
-					appData.mSectorsisBest[currentSector][i+1] = 1
-				else
-					appData.mSectorsisBest[currentSector][i+1] = 0
-				end
-				appData.mSectors[currentSector][i+1] = os.preciseClock() - appData.mSectorsCheck.startTime
-				appData.mSectorsCheck.startTime = os.preciseClock()
-				appData.mSectorsCheck.current = i+1
-				appData.mSectorsCheck.isValid = true
-			end
-		end
-	end
+        local splnPos = CAR.splinePosition
+        local sectorStartPos = appData.sectors[currentSector]
+        local sectorEndPos = currentSector < appData.sector_count and appData.sectors[currentSector+1] or 1
+        local width = math.abs((sectorEndPos-sectorStartPos)/8)
+        for i=0, 7 do
+                if splnPos >= (sectorStartPos + i*width) and splnPos < (sectorStartPos + (i+1)*width) then
+                        if i+1 ~= appData.mSectorsCheck.current then
+                                local t = os.preciseClock() - appData.mSectorsCheck.startTime
+                                local bestMicro = appData.sectorsdata.microBest[currentSector] and appData.sectorsdata.microBest[currentSector][i+1]
+                                if appData.mSectorsCheck.isValid and bestMicro and bestMicro > 0 and t < bestMicro then
+                                        appData.mSectorsisBest[currentSector][i+1] = 1
+                                else
+                                        appData.mSectorsisBest[currentSector][i+1] = 0
+                                end
+                                appData.mSectors[currentSector][i+1] = t
+                                appData.mSectorsCheck.startTime = os.preciseClock()
+                                appData.mSectorsCheck.current = i+1
+                                appData.mSectorsCheck.isValid = true
+                        end
+                end
+        end
 end
 
 -- ================= LOGICA DE CAPTURA DE ESTADO =================
@@ -1311,6 +1315,10 @@ function script.update(dt)
                                         app.sNotif = "S" .. appData.sector_count .. " " ..
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
                                         appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
+                                        appData.sectorsdata.microBest[appData.sector_count] = appData.sectorsdata.microBest[appData.sector_count] or {}
+                                        for j=1, 8 do
+                                                appData.sectorsdata.microBest[appData.sector_count][j] = appData.mSectors[appData.sector_count][j] or 0
+                                        end
                                         app.saveCarData()
                                         saveSectorGhost(appData.sector_count, app.prevSectorTime)
                                 end
@@ -1324,6 +1332,10 @@ function script.update(dt)
                                         app.sNotif = "S" .. CAR.currentSector .. " " ..
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
                                         appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
+                                        appData.sectorsdata.microBest[CAR.currentSector] = appData.sectorsdata.microBest[CAR.currentSector] or {}
+                                        for j=1, 8 do
+                                                appData.sectorsdata.microBest[CAR.currentSector][j] = appData.mSectors[CAR.currentSector][j] or 0
+                                        end
                                         app.saveCarData()
                                         saveSectorGhost(CAR.currentSector, app.prevSectorTime)
                                 end
