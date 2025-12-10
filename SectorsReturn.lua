@@ -1419,7 +1419,7 @@ function script.update(dt)
                         targetSector = targetSector or (((CAR.currentSector + 1) <= appData.sector_count) and (CAR.currentSector + 1) or 1)
 
                         if targetSector and app.liveSector ~= targetSector then
-                                startLiveTiming(targetSector, now, true)
+                                startLiveTiming(targetSector, now, false)
                                 sectorStartedThisFrame = true
                         end
                 end
