@@ -1416,9 +1416,11 @@ function script.update(dt)
                                 targetSector = ((lastSector % appData.sector_count) + 1)
                         end
                         targetSector = targetSector or (((CAR.currentSector + 1) <= appData.sector_count) and (CAR.currentSector + 1) or 1)
-                        resetMicroSectorState(targetSector, now)
-                        startLiveTiming(targetSector, now, false)
-                        sectorStartedThisFrame = true
+
+                        if targetSector and app.liveSector ~= targetSector then
+                                startLiveTiming(targetSector, now, true)
+                                sectorStartedThisFrame = true
+                        end
                 end
                 -- AC referencia splits desde 0, tablas Lua desde 1
                 app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or CAR.previousSectorTime
