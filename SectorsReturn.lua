@@ -85,30 +85,35 @@ app.getTrackSectors = function()
 end
 
 local appData = {
-	prevLapCount = -1,
-	sector_count = #app.getTrackSectors(),
-	sectors = app.getTrackSectors(),
-	current_sectors = {},
-	sectorsValid = {},
-	sectorsdata = {
-		best = {},
-		target = {},
-	},
-	pb = false
+        prevLapCount = -1,
+        sector_count = #app.getTrackSectors(),
+        sectors = app.getTrackSectors(),
+        current_sectors = {},
+        sectorsValid = {},
+        sectorsdata = {
+                best = {},
+                target = {},
+                microBest = {},
+        },
+        mSectorsLast = {},
+        pb = false
 }
 
 --- Inicializar micro sectores
 app.set_microSectors = function()
-	appData.mSectors = {}
-	appData.mSectorsisBest = {}
-	for i=1, appData.sector_count do
-		appData.mSectors[i] = {}
-		appData.mSectorsisBest[i] = {}
-		for j=1, 8 do
-			appData.mSectors[i][j] = 0
-			appData.mSectorsisBest[i][j] = 0
-		end
-	end
+        appData.mSectors = {}
+        appData.mSectorsisBest = {}
+        appData.mSectorsLast = {}
+        for i=1, appData.sector_count do
+                appData.mSectors[i] = {}
+                appData.mSectorsisBest[i] = {}
+                for j=1, 8 do
+                        appData.mSectors[i][j] = 0
+                        appData.mSectorsisBest[i][j] = 0
+                        appData.mSectorsLast[i] = appData.mSectorsLast[i] or {}
+                        appData.mSectorsLast[i][j] = 0
+                end
+        end
 
 	appData.mSectorsCheck = {
 		current = 1,
@@ -117,9 +122,17 @@ app.set_microSectors = function()
 	}
 end
 
+local function copyCurrentMicroToLast(sectorIndex)
+        if not sectorIndex then return end
+        appData.mSectorsLast[sectorIndex] = appData.mSectorsLast[sectorIndex] or {}
+        for j=1, 8 do
+                appData.mSectorsLast[sectorIndex][j] = appData.mSectors[sectorIndex][j] or 0
+        end
+end
+
 --- Obtener sector actual basado en posición spline
 app.getCurrentSector = function()
-	for i=1, appData.sector_count do
+        for i=1, appData.sector_count do
 		if CAR.splinePosition >= appData.sectors[i] and CAR.splinePosition < (i < appData.sector_count and appData.sectors[i+1] or 1) then
 			return i
 		end
@@ -145,10 +158,10 @@ end
 
 
 app.saveCarData = function(carId)
-	if not carId then carId = ac.getCarID() end
-	local filePath = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\"..carId..".json"
-	app.userData.data[TRACK] = appData.sectorsdata
-	local carJson = JSON.stringify(app.userData.data, {pretty=true})
+        if not carId then carId = ac.getCarID() end
+        local filePath = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\"..carId..".json"
+        app.userData.data[TRACK] = appData.sectorsdata
+        local carJson = JSON.stringify(app.userData.data, {pretty=true})
 	io.saveAsync(filePath, carJson)
 end
 
@@ -163,9 +176,9 @@ app.loadCarData = function(carId)
 		if sectorsdata then
 			appData.sectorsdata = sectorsdata
 		end
-	else
-		app.userData.data[TRACK] = { best = {}, target = {} }
-	end
+        else
+                app.userData.data[TRACK] = { best = {}, target = {}, microBest = {} }
+        end
 end
 
 app.checkOldSettings = function()
@@ -248,15 +261,18 @@ app.savePersonalBest = function(lapTimeMs)
 end
 
 app.init = function()
-	app.checkOldSettings()
-	app.loadSettings()
-	app.loadCarData()
-	for i=1, appData.sector_count do
-		appData.current_sectors[i] = 0
-		appData.sectorsdata.best[i] = appData.sectorsdata.best[i] or 0
-		appData.sectorsdata.target[i] = appData.sectorsdata.target[i] or 0
-		appData.sectorsValid[i] = true
-	end
+        app.checkOldSettings()
+        app.loadSettings()
+        app.loadCarData()
+        appData.sectorsdata.microBest = appData.sectorsdata.microBest or {}
+        for i=1, appData.sector_count do
+                appData.current_sectors[i] = 0
+                appData.sectorsdata.best[i] = appData.sectorsdata.best[i] or 0
+                appData.sectorsdata.target[i] = appData.sectorsdata.target[i] or 0
+                appData.sectorsdata.microBest[i] = appData.sectorsdata.microBest[i] or {}
+                appData.mSectorsLast[i] = appData.mSectorsLast[i] or {}
+                appData.sectorsValid[i] = true
+        end
     app.loadPersonalBest()
     app.set_microSectors()
     if SIM.allowedTyresOut > -1 then app.allowedTyresOut = app.userData.settings.allowedTyresOut end
@@ -813,85 +829,141 @@ end
 
 -- ================= DIBUJADO DE UI =================
 
+local MICRO_DELTA_SMALL = 0.10
+local MS_COLOR_BEST = app.colors.PURPLE
+local MS_COLOR_GREEN = app.colors.GREEN
+local MS_COLOR_ORANGE = app.colors.ORANGE
+local MS_COLOR_RED = app.colors.RED
+local MS_COLOR_GRAY = app.colors.MID_GREY
+local MS_COLOR_HIGHLIGHT = app.colors.WHITE
+
 --- Dibuja las barras de micro-sectores y AHORA TAMBIÉN LOS BOTONES
 local function drawmSectors(dt)
-        local mSectorWidth = app.uiDecay / 8
-        local basey = 104
-        local basex = 35
-	
-    -- Línea gris superior
-    ui.drawSimpleLine(vec2(basex, basey-9), vec2(basex, basey+9), app.colors.GREY, 1)
+local mSectorWidth = app.uiDecay / 8
+local basey = 104
+local basex = 35
 
-	local x
-	for i=1, appData.sector_count do
-		basex = app.uiDecay * (i-1) + 35
-		ui.pushID(i) 
-        -- Dibujar barras de microsectores
-        for j=1, 8 do
-			local color = appData.mSectorsisBest[i][j] == 0 and app.colors.MID_GREY or app.colors.PURPLE
-			if i == app.currentSector and j == appData.mSectorsCheck.current then
-				color = app.colors.YELLOW
-			end
-			x = basex + (j-1)*mSectorWidth
-			ui.drawSimpleLine(vec2(x+1, basey), vec2(x+mSectorWidth, basey), color, 8)
-		end
-        
-        -- Línea divisoria vertical
-		ui.drawSimpleLine(vec2(basex + app.uiDecay, basey-90), vec2(basex + app.uiDecay, basey+9), app.colors.GREY, 1)
+-- Línea gris superior
+ui.drawSimpleLine(vec2(basex, basey-9), vec2(basex, basey+9), app.colors.GREY, 1)
 
-        -- Etiqueta del Sector (S1, S2...)
-		ui.sameLine(basex + app.uiDecay - 20)
-		if appData.sectorsValid[i] then
-			ui.dwriteText("S"..i, 14, app.colors.GREEN)
-		else
-			ui.dwriteText("S"..i, 14, app.colors.ORANGE)
-		end
-		
-		
-                -- === BOTÓN DE GUARDAR PUNTO DE RETORNO ===
-        local savePos = vec2(basex + app.uiDecay - 70, basey + 8)
-        ui.setCursor(savePos)
-        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.9, 0.9, 0.3, 1))  -- color “amarillo”
-        if ui.iconButton(ui.Icons.Save, vec2(18, 18)) then
-            app.saveSectorState(i)
-        end
-        ui.popStyleColor()
+local x
+for i=1, appData.sector_count do
+basex = app.uiDecay * (i-1) + 35
+ui.pushID(i)
+-- Dibujar barras de microsectores
+for j=1, 8 do
+local best = appData.sectorsdata.microBest[i] and appData.sectorsdata.microBest[i][j]
+local last = appData.mSectorsLast[i] and appData.mSectorsLast[i][j]
+local current = appData.mSectors[i][j]
+local hasBest = best ~= nil and best > 0
+local hasLast = last ~= nil and last > 0
+local hasCurrent = current ~= nil and current > 0
+local deltaBest = hasBest and hasCurrent and (current - best) or nil
+local sectorIsInvalid = appData.sectorsValid[i] == false
 
-        if ui.itemHovered() then
-            ui.setTooltip("Guardar punto de retorno para Sector "..i.." desde la posición actual")
-        end
+local baseColor
+if not hasBest or not hasCurrent or sectorIsInvalid then
+baseColor = MS_COLOR_GRAY
+elseif current < best then
+baseColor = MS_COLOR_BEST
+elseif hasLast and current < last then
+baseColor = MS_COLOR_GREEN
+elseif deltaBest ~= nil and deltaBest < MICRO_DELTA_SMALL then
+baseColor = MS_COLOR_ORANGE
+else
+baseColor = MS_COLOR_RED
+end
+x = basex + (j-1)*mSectorWidth
+local lineStart = vec2(x+1, basey)
+local lineEnd = vec2(x+mSectorWidth, basey)
+if i == app.currentSector and j == appData.mSectorsCheck.current then
+ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 10)
+end
+ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
 
-        -- === BOTÓN DE RETORNO (igual que antes) ===
-        local btnPos = vec2(basex + app.uiDecay - 45, basey + 8)
-        ui.setCursor(btnPos)
+local hitPos = vec2(x+1, basey - 4)
+ui.setCursor(hitPos)
+if ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(mSectorWidth, 8)) then
+end
 
-        local hasState = app.sectorStates[i] ~= nil
-        local btnColor = hasState and rgbm(0, 1, 0, 1) or rgbm(1, 1, 1, 0.2)
+if ui.itemHovered() then
+local currentText = hasCurrent and app.time_to_string(current) or "--.---"
+local bestText = hasBest and app.time_to_string(best) or "--.---"
 
-        ui.pushStyleColor(ui.StyleColor.Text, btnColor)
-        if ui.iconButton(ui.Icons.Restart, vec2(18, 18)) then
-             if hasState then
-                 app.teleportToSector(i)
-             else
-                 ui.toast(ui.Icons.Warning, "Todavía no guardaste el punto de retorno del Sector "..i)
-             end
-        end
-        ui.popStyleColor()
+local deltaText = ""
+if hasBest and hasCurrent then
+local delta = current - best
+local sign = delta >= 0 and "+" or ""
+deltaText = string.format("  Δ: %s%.3f", sign, delta)
+end
+
+local tooltip = string.format(
+"Sector S%d micro %d\nActual: %s%s\nBest:   %s",
+i, j,
+currentText,
+deltaText,
+bestText
+)
+ui.setTooltip(tooltip)
+end
+end
+
+-- Línea divisoria vertical
+ui.drawSimpleLine(vec2(basex + app.uiDecay, basey-90), vec2(basex + app.uiDecay, basey+9), app.colors.GREY, 1)
+
+-- Etiqueta del Sector (S1, S2...)
+ui.sameLine(basex + app.uiDecay - 20)
+if appData.sectorsValid[i] then
+ui.dwriteText("S"..i, 14, app.colors.GREEN)
+else
+ui.dwriteText("S"..i, 14, app.colors.ORANGE)
+end
 
 
-        if ui.itemHovered() then
-            if hasState then
-                ui.setTooltip("Reiniciar Sector "..i)
-            else
-                ui.setTooltip("Punto de retorno no guardado aún.\nPasa por este sector para activarlo.")
-            end
-        end
+-- === BOTÓN DE GUARDAR PUNTO DE RETORNO ===
+local savePos = vec2(basex + app.uiDecay - 70, basey + 8)
+ui.setCursor(savePos)
+ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.9, 0.9, 0.3, 1))  -- color “amarillo”
+if ui.iconButton(ui.Icons.Save, vec2(18, 18)) then
+app.saveSectorState(i)
+end
+ui.popStyleColor()
 
-                ui.popID()
-        end
+if ui.itemHovered() then
+ui.setTooltip("Guardar punto de retorno para Sector "..i.." desde la posición actual")
+end
 
-    -- Línea inferior
-        ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
+-- === BOTÓN DE RETORNO (igual que antes) ===
+local btnPos = vec2(basex + app.uiDecay - 45, basey + 8)
+ui.setCursor(btnPos)
+
+local hasState = app.sectorStates[i] ~= nil
+local btnColor = hasState and rgbm(0, 1, 0, 1) or rgbm(1, 1, 1, 0.2)
+
+ui.pushStyleColor(ui.StyleColor.Text, btnColor)
+if ui.iconButton(ui.Icons.Restart, vec2(18, 18)) then
+if hasState then
+app.teleportToSector(i)
+else
+ui.toast(ui.Icons.Warning, "Todavía no guardaste el punto de retorno del Sector "..i)
+end
+end
+ui.popStyleColor()
+
+
+if ui.itemHovered() then
+if hasState then
+ui.setTooltip("Reiniciar Sector "..i)
+else
+ui.setTooltip("Punto de retorno no guardado aún.\nPasa por este sector para activarlo.")
+end
+end
+
+ui.popID()
+end
+
+-- Línea inferior
+ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
 end
 
 local function idealSectorTimeAtCurrentPos(sectorIndex)
@@ -1140,26 +1212,27 @@ local function isOutside()
 end
 
 local function mSectorsStep(currentSector)
-	local splnPos = CAR.splinePosition
-	local sectorStartPos = appData.sectors[currentSector]
-	local sectorEndPos = currentSector < appData.sector_count and appData.sectors[currentSector+1] or 1
-	local width = math.abs((sectorEndPos-sectorStartPos)/8)
-	for i=0, 7 do
-		if splnPos >= (sectorStartPos + i*width) and splnPos < (sectorStartPos + (i+1)*width) then
-			if i+1 ~= appData.mSectorsCheck.current then
-				local t = os.preciseClock() - appData.mSectorsCheck.startTime
-				if appData.mSectorsCheck.isValid and (t < appData.mSectors[currentSector][i+1] or appData.mSectors[currentSector][i+1] == 0) then
-					appData.mSectorsisBest[currentSector][i+1] = 1
-				else
-					appData.mSectorsisBest[currentSector][i+1] = 0
-				end
-				appData.mSectors[currentSector][i+1] = os.preciseClock() - appData.mSectorsCheck.startTime
-				appData.mSectorsCheck.startTime = os.preciseClock()
-				appData.mSectorsCheck.current = i+1
-				appData.mSectorsCheck.isValid = true
-			end
-		end
-	end
+        local splnPos = CAR.splinePosition
+        local sectorStartPos = appData.sectors[currentSector]
+        local sectorEndPos = currentSector < appData.sector_count and appData.sectors[currentSector+1] or 1
+        local width = math.abs((sectorEndPos-sectorStartPos)/8)
+        for i=0, 7 do
+                if splnPos >= (sectorStartPos + i*width) and splnPos < (sectorStartPos + (i+1)*width) then
+                        if i+1 ~= appData.mSectorsCheck.current then
+                                local t = os.preciseClock() - appData.mSectorsCheck.startTime
+                                local bestMicro = appData.sectorsdata.microBest[currentSector] and appData.sectorsdata.microBest[currentSector][i+1]
+                                if appData.mSectorsCheck.isValid and bestMicro and bestMicro > 0 and t < bestMicro then
+                                        appData.mSectorsisBest[currentSector][i+1] = 1
+                                else
+                                        appData.mSectorsisBest[currentSector][i+1] = 0
+                                end
+                                appData.mSectors[currentSector][i+1] = t
+                                appData.mSectorsCheck.startTime = os.preciseClock()
+                                appData.mSectorsCheck.current = i+1
+                                appData.mSectorsCheck.isValid = true
+                        end
+                end
+        end
 end
 
 -- ================= LOGICA DE CAPTURA DE ESTADO =================
@@ -1306,11 +1379,16 @@ function script.update(dt)
                                 appData.current_sectors[appData.sector_count] = app.prevSectorTime
                         end
                         if app.currentSectorValid then
+                                copyCurrentMicroToLast(appData.sector_count)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
                                         or appData.sectorsdata.best[appData.sector_count] == 0 then
                                         app.sNotif = "S" .. appData.sector_count .. " " ..
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
                                         appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
+                                        appData.sectorsdata.microBest[appData.sector_count] = appData.sectorsdata.microBest[appData.sector_count] or {}
+                                        for j=1, 8 do
+                                                appData.sectorsdata.microBest[appData.sector_count][j] = appData.mSectors[appData.sector_count][j] or 0
+                                        end
                                         app.saveCarData()
                                         saveSectorGhost(appData.sector_count, app.prevSectorTime)
                                 end
@@ -1319,11 +1397,16 @@ function script.update(dt)
                         app.prevSectorTime = CAR.previousSectorTime / 1000
                         appData.current_sectors[CAR.currentSector] = app.prevSectorTime
                         if app.currentSectorValid then
+                                copyCurrentMicroToLast(CAR.currentSector)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
                                         or appData.sectorsdata.best[CAR.currentSector] == 0 then
                                         app.sNotif = "S" .. CAR.currentSector .. " " ..
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
                                         appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
+                                        appData.sectorsdata.microBest[CAR.currentSector] = appData.sectorsdata.microBest[CAR.currentSector] or {}
+                                        for j=1, 8 do
+                                                appData.sectorsdata.microBest[CAR.currentSector][j] = appData.mSectors[CAR.currentSector][j] or 0
+                                        end
                                         app.saveCarData()
                                         saveSectorGhost(CAR.currentSector, app.prevSectorTime)
                                 end
