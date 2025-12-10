@@ -851,7 +851,7 @@ end
 local MICRO_DELTA_SMALL = 0.10
 local MS_COLOR_BEST = app.colors.PURPLE
 local MS_COLOR_GREEN = app.colors.GREEN
-local MS_COLOR_ORANGE = app.colors.ORANGE
+local MS_COLOR_ORANGE = app.colors.YELLOW
 local MS_COLOR_RED = app.colors.RED
 local MS_COLOR_GRAY = app.colors.MID_GREY
 local MS_COLOR_HIGHLIGHT = app.colors.CYAN
@@ -878,20 +878,24 @@ local isActiveMicro = i == app.currentSector and j == appData.mSectorsCheck.curr
 local hasBest = best ~= nil and best > 0
 local hasLast = last ~= nil and last > 0
 local hasCurrent = current ~= nil and current > 0 and not isActiveMicro
-local deltaBest = hasBest and hasCurrent and (current - best) or nil
 local sectorIsInvalid = appData.sectorsValid[i] == false
 
 local baseColor
-if not hasBest or not hasCurrent or sectorIsInvalid then
+if not hasCurrent or sectorIsInvalid then
 baseColor = MS_COLOR_GRAY
+elseif not hasBest then
+baseColor = MS_COLOR_BEST
 elseif current < best then
 baseColor = MS_COLOR_BEST
+else
+local deltaBest = current - best
+if deltaBest >= 0 and deltaBest < MICRO_DELTA_SMALL then
+baseColor = MS_COLOR_ORANGE
 elseif hasLast and current < last then
 baseColor = MS_COLOR_GREEN
-elseif deltaBest ~= nil and deltaBest < MICRO_DELTA_SMALL then
-baseColor = MS_COLOR_ORANGE
 else
 baseColor = MS_COLOR_RED
+end
 end
 x = basex + (j-1)*mSectorWidth
 local lineStart = vec2(x+1, basey)
