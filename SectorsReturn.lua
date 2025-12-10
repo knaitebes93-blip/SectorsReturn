@@ -103,15 +103,15 @@ local appData = {
 app.set_microSectors = function()
         appData.mSectors = {}
         appData.mSectorsisBest = {}
-        appData.mSectorsLast = appData.mSectorsLast or {}
+        appData.mSectorsLast = {}
         for i=1, appData.sector_count do
                 appData.mSectors[i] = {}
                 appData.mSectorsisBest[i] = {}
-                appData.mSectorsLast[i] = appData.mSectorsLast[i] or {}
                 for j=1, 8 do
                         appData.mSectors[i][j] = 0
                         appData.mSectorsisBest[i][j] = 0
-                        appData.mSectorsLast[i][j] = appData.mSectorsLast[i][j] or 0
+                        appData.mSectorsLast[i] = appData.mSectorsLast[i] or {}
+                        appData.mSectorsLast[i][j] = 0
                 end
         end
 
@@ -830,12 +830,12 @@ end
 -- ================= DIBUJADO DE UI =================
 
 local MICRO_DELTA_SMALL = 0.10
-local MS_COLOR_CURRENT = app.colors.YELLOW
 local MS_COLOR_BEST = app.colors.PURPLE
 local MS_COLOR_GREEN = app.colors.GREEN
 local MS_COLOR_ORANGE = app.colors.ORANGE
 local MS_COLOR_RED = app.colors.RED
 local MS_COLOR_GRAY = app.colors.MID_GREY
+local MS_COLOR_HIGHLIGHT = app.colors.WHITE
 
 --- Dibuja las barras de micro-sectores y AHORA TAMBIÉN LOS BOTONES
 local function drawmSectors(dt)
@@ -858,25 +858,27 @@ local function drawmSectors(dt)
                         local hasBest = best ~= nil and best > 0
                         local hasLast = last ~= nil and last > 0
                         local deltaBest = hasBest and (current - best) or nil
-                        local isCurrent = (i == app.currentSector and j == appData.mSectorsCheck.current)
                         local sectorIsInvalid = appData.sectorsValid[i] == false
 
-                        local color
-                        if isCurrent then
-                                color = MS_COLOR_CURRENT
-                        elseif not hasBest or sectorIsInvalid then
-                                color = MS_COLOR_GRAY
+                        local baseColor
+                        if not hasBest or sectorIsInvalid then
+                                baseColor = MS_COLOR_GRAY
                         elseif current < best then
-                                color = MS_COLOR_BEST
+                                baseColor = MS_COLOR_BEST
                         elseif hasLast and current < last then
-                                color = MS_COLOR_GREEN
+                                baseColor = MS_COLOR_GREEN
                         elseif deltaBest ~= nil and deltaBest < MICRO_DELTA_SMALL then
-                                color = MS_COLOR_ORANGE
+                                baseColor = MS_COLOR_ORANGE
                         else
-                                color = MS_COLOR_RED
+                                baseColor = MS_COLOR_RED
                         end
                         x = basex + (j-1)*mSectorWidth
-                        ui.drawSimpleLine(vec2(x+1, basey), vec2(x+mSectorWidth, basey), color, 8)
+                        local lineStart = vec2(x+1, basey)
+                        local lineEnd = vec2(x+mSectorWidth, basey)
+                        if i == app.currentSector and j == appData.mSectorsCheck.current then
+                                ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 10)
+                        end
+                        ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
                 end
         
         -- Línea divisoria vertical
