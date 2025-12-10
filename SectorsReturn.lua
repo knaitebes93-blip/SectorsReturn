@@ -885,16 +885,18 @@ if not hasCurrent or sectorIsInvalid then
 baseColor = MS_COLOR_GRAY
 elseif not hasBest then
 baseColor = MS_COLOR_BEST
-elseif current < best then
+else
+if current <= best then
 baseColor = MS_COLOR_BEST
 else
 local deltaBest = current - best
-if deltaBest >= 0 and deltaBest < MICRO_DELTA_SMALL then
+if deltaBest < MICRO_DELTA_SMALL then
 baseColor = MS_COLOR_ORANGE
 elseif hasLast and current < last then
 baseColor = MS_COLOR_GREEN
 else
 baseColor = MS_COLOR_RED
+end
 end
 end
 x = basex + (j-1)*mSectorWidth
