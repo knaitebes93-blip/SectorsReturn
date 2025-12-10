@@ -1316,6 +1316,35 @@ local function checkSectorChangeAndCapture()
     app.lastFrameSector = newSector
 end
 
+local function reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
+        if not finishedSector or not sectorTimeSec then return end
+
+        appData.mSectors[finishedSector] = appData.mSectors[finishedSector] or {}
+
+        if not appData.mSectors[finishedSector][8] or appData.mSectors[finishedSector][8] == 0 then
+                local sumFirst7 = 0
+                for j = 1, 7 do
+                        sumFirst7 = sumFirst7 + (appData.mSectors[finishedSector][j] or 0)
+                end
+
+                local lastMicro = sectorTimeSec - sumFirst7
+                if lastMicro < 0 then lastMicro = 0 end
+                appData.mSectors[finishedSector][8] = lastMicro
+        end
+
+        local sumAll = 0
+        for j = 1, 8 do
+                sumAll = sumAll + (appData.mSectors[finishedSector][j] or 0)
+        end
+
+        local delta = sectorTimeSec - sumAll
+        if math.abs(delta) > 0.02 then
+                local adjusted = (appData.mSectors[finishedSector][8] or 0) + delta
+                if adjusted < 0 then adjusted = 0 end
+                appData.mSectors[finishedSector][8] = adjusted
+        end
+end
+
 function script.update(dt)
         isOutside()
         app.currentSector = app.getCurrentSector()
@@ -1445,18 +1474,9 @@ function script.update(dt)
                         if app.currentSectorValid then
                                 local finishedSector = appData.sector_count
                                 local sectorTimeSec = app.prevSectorTime
-                                if appData.mSectors[finishedSector] and (not appData.mSectors[finishedSector][8] or appData.mSectors[finishedSector][8] == 0) then
-                                        local sumFirst7 = 0
-                                        for j = 1, 7 do
-                                                sumFirst7 = sumFirst7 + (appData.mSectors[finishedSector][j] or 0)
-                                        end
+                                reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
 
-                                        local lastMicro = sectorTimeSec - sumFirst7
-                                        if lastMicro < 0 then lastMicro = 0 end
-                                        appData.mSectors[finishedSector][8] = lastMicro
-                                end
-
-                                copyCurrentMicroToLast(appData.sector_count)
+                                copyCurrentMicroToLast(finishedSector)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
                                         or appData.sectorsdata.best[appData.sector_count] == 0 then
                                         app.sNotif = "S" .. appData.sector_count .. " " ..
@@ -1476,18 +1496,9 @@ function script.update(dt)
                         if app.currentSectorValid then
                                 local finishedSector = CAR.currentSector
                                 local sectorTimeSec = app.prevSectorTime
-                                if appData.mSectors[finishedSector] and (not appData.mSectors[finishedSector][8] or appData.mSectors[finishedSector][8] == 0) then
-                                        local sumFirst7 = 0
-                                        for j = 1, 7 do
-                                                sumFirst7 = sumFirst7 + (appData.mSectors[finishedSector][j] or 0)
-                                        end
+                                reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
 
-                                        local lastMicro = sectorTimeSec - sumFirst7
-                                        if lastMicro < 0 then lastMicro = 0 end
-                                        appData.mSectors[finishedSector][8] = lastMicro
-                                end
-
-                                copyCurrentMicroToLast(CAR.currentSector)
+                                copyCurrentMicroToLast(finishedSector)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
                                         or appData.sectorsdata.best[CAR.currentSector] == 0 then
                                         app.sNotif = "S" .. CAR.currentSector .. " " ..
