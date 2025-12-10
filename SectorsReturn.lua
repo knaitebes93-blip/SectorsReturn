@@ -1441,6 +1441,19 @@ function script.update(dt)
                                 appData.current_sectors[appData.sector_count] = app.prevSectorTime
                         end
                         if app.currentSectorValid then
+                                local finishedSector = appData.sector_count
+                                local sectorTimeSec = app.prevSectorTime
+                                if appData.mSectors[finishedSector] and (not appData.mSectors[finishedSector][8] or appData.mSectors[finishedSector][8] == 0) then
+                                        local sumFirst7 = 0
+                                        for j = 1, 7 do
+                                                sumFirst7 = sumFirst7 + (appData.mSectors[finishedSector][j] or 0)
+                                        end
+
+                                        local lastMicro = sectorTimeSec - sumFirst7
+                                        if lastMicro < 0 then lastMicro = 0 end
+                                        appData.mSectors[finishedSector][8] = lastMicro
+                                end
+
                                 copyCurrentMicroToLast(appData.sector_count)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
                                         or appData.sectorsdata.best[appData.sector_count] == 0 then
@@ -1459,6 +1472,19 @@ function script.update(dt)
                         app.prevSectorTime = CAR.previousSectorTime / 1000
                         appData.current_sectors[CAR.currentSector] = app.prevSectorTime
                         if app.currentSectorValid then
+                                local finishedSector = CAR.currentSector
+                                local sectorTimeSec = app.prevSectorTime
+                                if appData.mSectors[finishedSector] and (not appData.mSectors[finishedSector][8] or appData.mSectors[finishedSector][8] == 0) then
+                                        local sumFirst7 = 0
+                                        for j = 1, 7 do
+                                                sumFirst7 = sumFirst7 + (appData.mSectors[finishedSector][j] or 0)
+                                        end
+
+                                        local lastMicro = sectorTimeSec - sumFirst7
+                                        if lastMicro < 0 then lastMicro = 0 end
+                                        appData.mSectors[finishedSector][8] = lastMicro
+                                end
+
                                 copyCurrentMicroToLast(CAR.currentSector)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
                                         or appData.sectorsdata.best[CAR.currentSector] == 0 then
