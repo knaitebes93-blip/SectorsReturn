@@ -95,21 +95,25 @@ local appData = {
                 target = {},
                 microBest = {},
         },
+        mSectorsLast = {},
         pb = false
 }
 
 --- Inicializar micro sectores
 app.set_microSectors = function()
-	appData.mSectors = {}
-	appData.mSectorsisBest = {}
-	for i=1, appData.sector_count do
-		appData.mSectors[i] = {}
-		appData.mSectorsisBest[i] = {}
-		for j=1, 8 do
-			appData.mSectors[i][j] = 0
-			appData.mSectorsisBest[i][j] = 0
-		end
-	end
+        appData.mSectors = {}
+        appData.mSectorsisBest = {}
+        appData.mSectorsLast = appData.mSectorsLast or {}
+        for i=1, appData.sector_count do
+                appData.mSectors[i] = {}
+                appData.mSectorsisBest[i] = {}
+                appData.mSectorsLast[i] = appData.mSectorsLast[i] or {}
+                for j=1, 8 do
+                        appData.mSectors[i][j] = 0
+                        appData.mSectorsisBest[i][j] = 0
+                        appData.mSectorsLast[i][j] = appData.mSectorsLast[i][j] or 0
+                end
+        end
 
 	appData.mSectorsCheck = {
 		current = 1,
@@ -118,9 +122,17 @@ app.set_microSectors = function()
 	}
 end
 
+local function copyCurrentMicroToLast(sectorIndex)
+        if not sectorIndex then return end
+        appData.mSectorsLast[sectorIndex] = appData.mSectorsLast[sectorIndex] or {}
+        for j=1, 8 do
+                appData.mSectorsLast[sectorIndex][j] = appData.mSectors[sectorIndex][j] or 0
+        end
+end
+
 --- Obtener sector actual basado en posición spline
 app.getCurrentSector = function()
-	for i=1, appData.sector_count do
+        for i=1, appData.sector_count do
 		if CAR.splinePosition >= appData.sectors[i] and CAR.splinePosition < (i < appData.sector_count and appData.sectors[i+1] or 1) then
 			return i
 		end
@@ -258,6 +270,7 @@ app.init = function()
                 appData.sectorsdata.best[i] = appData.sectorsdata.best[i] or 0
                 appData.sectorsdata.target[i] = appData.sectorsdata.target[i] or 0
                 appData.sectorsdata.microBest[i] = appData.sectorsdata.microBest[i] or {}
+                appData.mSectorsLast[i] = appData.mSectorsLast[i] or {}
                 appData.sectorsValid[i] = true
         end
     app.loadPersonalBest()
@@ -816,6 +829,14 @@ end
 
 -- ================= DIBUJADO DE UI =================
 
+local MICRO_DELTA_SMALL = 0.10
+local MS_COLOR_CURRENT = app.colors.YELLOW
+local MS_COLOR_BEST = app.colors.PURPLE
+local MS_COLOR_GREEN = app.colors.GREEN
+local MS_COLOR_ORANGE = app.colors.ORANGE
+local MS_COLOR_RED = app.colors.RED
+local MS_COLOR_GRAY = app.colors.MID_GREY
+
 --- Dibuja las barras de micro-sectores y AHORA TAMBIÉN LOS BOTONES
 local function drawmSectors(dt)
         local mSectorWidth = app.uiDecay / 8
@@ -825,19 +846,38 @@ local function drawmSectors(dt)
     -- Línea gris superior
     ui.drawSimpleLine(vec2(basex, basey-9), vec2(basex, basey+9), app.colors.GREY, 1)
 
-	local x
-	for i=1, appData.sector_count do
-		basex = app.uiDecay * (i-1) + 35
-		ui.pushID(i) 
+        local x
+        for i=1, appData.sector_count do
+                basex = app.uiDecay * (i-1) + 35
+                ui.pushID(i)
         -- Dibujar barras de microsectores
         for j=1, 8 do
-			local color = appData.mSectorsisBest[i][j] == 0 and app.colors.MID_GREY or app.colors.PURPLE
-			if i == app.currentSector and j == appData.mSectorsCheck.current then
-				color = app.colors.YELLOW
-			end
-			x = basex + (j-1)*mSectorWidth
-			ui.drawSimpleLine(vec2(x+1, basey), vec2(x+mSectorWidth, basey), color, 8)
-		end
+                        local best = appData.sectorsdata.microBest[i] and appData.sectorsdata.microBest[i][j]
+                        local last = appData.mSectorsLast[i] and appData.mSectorsLast[i][j]
+                        local current = appData.mSectors[i][j]
+                        local hasBest = best ~= nil and best > 0
+                        local hasLast = last ~= nil and last > 0
+                        local deltaBest = hasBest and (current - best) or nil
+                        local isCurrent = (i == app.currentSector and j == appData.mSectorsCheck.current)
+                        local sectorIsInvalid = appData.sectorsValid[i] == false
+
+                        local color
+                        if isCurrent then
+                                color = MS_COLOR_CURRENT
+                        elseif not hasBest or sectorIsInvalid then
+                                color = MS_COLOR_GRAY
+                        elseif current < best then
+                                color = MS_COLOR_BEST
+                        elseif hasLast and current < last then
+                                color = MS_COLOR_GREEN
+                        elseif deltaBest ~= nil and deltaBest < MICRO_DELTA_SMALL then
+                                color = MS_COLOR_ORANGE
+                        else
+                                color = MS_COLOR_RED
+                        end
+                        x = basex + (j-1)*mSectorWidth
+                        ui.drawSimpleLine(vec2(x+1, basey), vec2(x+mSectorWidth, basey), color, 8)
+                end
         
         -- Línea divisoria vertical
 		ui.drawSimpleLine(vec2(basex + app.uiDecay, basey-90), vec2(basex + app.uiDecay, basey+9), app.colors.GREY, 1)
@@ -1310,6 +1350,7 @@ function script.update(dt)
                                 appData.current_sectors[appData.sector_count] = app.prevSectorTime
                         end
                         if app.currentSectorValid then
+                                copyCurrentMicroToLast(appData.sector_count)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
                                         or appData.sectorsdata.best[appData.sector_count] == 0 then
                                         app.sNotif = "S" .. appData.sector_count .. " " ..
@@ -1327,6 +1368,7 @@ function script.update(dt)
                         app.prevSectorTime = CAR.previousSectorTime / 1000
                         appData.current_sectors[CAR.currentSector] = app.prevSectorTime
                         if app.currentSectorValid then
+                                copyCurrentMicroToLast(CAR.currentSector)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
                                         or appData.sectorsdata.best[CAR.currentSector] == 0 then
                                         app.sNotif = "S" .. CAR.currentSector .. " " ..
