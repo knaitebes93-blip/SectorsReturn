@@ -1249,10 +1249,10 @@ local function storeMicroTime(sectorIndex, microIndex, duration)
         appData.mSectors[sectorIndex][microIndex] = duration
 end
 
-local function finalizeCurrentMicroTime(sectorIndex, nowClock)
+local function finalizeCurrentMicroTime(sectorIndex, nowClock, microIndex)
         if not sectorIndex then return end
 
-        local prevIndex = appData.mSectorsCheck.current
+        local prevIndex = microIndex or appData.mSectorsCheck.current
         if not prevIndex or prevIndex < 1 or prevIndex > 8 then return end
 
         if not appData.mSectorsCheck.startTime or appData.mSectorsCheck.startTime <= 0 then return end
@@ -1378,7 +1378,8 @@ function script.update(dt)
                 local lastSector = app.lastFrameSector
                 local currentSector = app.currentSector
                 if lastSector and currentSector and currentSector ~= lastSector then
-                        finalizeCurrentMicroTime(lastSector, now)
+                        local prevMicro = appData.mSectorsCheck.current
+                        finalizeCurrentMicroTime(lastSector, now, prevMicro)
                         startLiveTiming(currentSector, now, true)
                         sectorStartedThisFrame = true
                 end
