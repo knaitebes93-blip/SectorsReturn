@@ -1299,6 +1299,10 @@ local function mSectorsStep(currentSector)
         local sectorEndPos = currentSector < appData.sector_count and appData.sectors[currentSector+1] or 1
         local width = math.abs((sectorEndPos-sectorStartPos)/8)
         local nowLapTimeSec = (CAR.lapTimeMs or 0) / 1000
+
+        if currentSector == 1 and (appData.mSectorsCheck.startTime == nil or nowLapTimeSec < appData.mSectorsCheck.startTime) then
+                resetMicroSectorState(currentSector, nowLapTimeSec)
+        end
         for i=0, 7 do
                 if splnPos >= (sectorStartPos + i*width) and splnPos < (sectorStartPos + (i+1)*width) then
                         local newIndex = i+1
