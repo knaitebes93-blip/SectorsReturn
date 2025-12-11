@@ -70,6 +70,24 @@ local app = {
     lastReturnSector = 1
 }
 
+local UI_STYLE = {
+        fontMain = ui.DWriteFont("Inter", 14),
+        fontNumbers = ui.DWriteFont("Inter", 18),
+        bg = rgbm(0.05, 0.06, 0.08, 0.94),
+        panel = rgbm(0.12, 0.14, 0.18, 0.96),
+        accent = rgbm(0.25, 0.52, 0.95, 0.95),
+        textPrimary = rgbm(0.92, 0.95, 1.0, 1),
+        textSecondary = rgbm(0.65, 0.71, 0.80, 1),
+        good = rgbm(0.32, 0.86, 0.55, 1),
+        bad = rgbm(0.96, 0.40, 0.38, 1),
+        invalid = rgbm(0.95, 0.70, 0.30, 1),
+        best = rgbm(0.67, 0.50, 0.97, 1),
+        cardPadding = 12,
+        cardRadius = 8,
+        columnGap = 12,
+        rowGap = 12,
+}
+
 
 --- Obtener puntos de inicio de sectores
 app.getTrackSectors = function()
@@ -851,176 +869,107 @@ end
 -- ================= DIBUJADO DE UI =================
 
 local MICRO_DELTA_SMALL = 0.10
-local MS_COLOR_BEST = app.colors.PURPLE
-local MS_COLOR_GREEN = app.colors.GREEN
-local MS_COLOR_ORANGE = app.colors.YELLOW
-local MS_COLOR_RED = app.colors.RED
-local MS_COLOR_GRAY = app.colors.MID_GREY
-local MS_COLOR_HIGHLIGHT = app.colors.CYAN
 
---- Dibuja las barras de micro-sectores y AHORA TAMBIÉN LOS BOTONES
-local function drawmSectors(dt)
-local mSectorsCount = 8
-local mSectorGap = 2
-local sectorInnerMargin = 2
+local function drawmSectors(dt, layout)
+        if not layout then return end
 
-local basey = 104
-local baseBasex = 35
+        local mSectorsCount = 8
+        local chipGap = 4
+        local chipHeight = 12
+        for _, card in ipairs(layout) do
+                local i = card.index
+                local innerPadding = UI_STYLE.cardPadding
+                local basey = (card.microY or (card.y + card.height - UI_STYLE.cardPadding - chipHeight))
+                local availableWidth = card.width - innerPadding * 2
+                local chipWidth = (availableWidth - chipGap * (mSectorsCount - 1)) / mSectorsCount
+                local firstX = card.x + innerPadding
 
--- Línea gris superior
-ui.drawSimpleLine(vec2(baseBasex, basey-9), vec2(baseBasex, basey+9), app.colors.GREY, 1)
+                ui.pushID(i)
+                for j = 1, mSectorsCount do
+                        local best = appData.sectorsdata.microBest[i] and appData.sectorsdata.microBest[i][j]
+                        local last = appData.mSectorsLast[i] and appData.mSectorsLast[i][j]
+                        local current = appData.mSectors[i][j]
+                        local isActiveMicro = i == app.currentSector and j == appData.mSectorsCheck.current
+                        local hasBest = best ~= nil and best > 0
+                        local hasLast = last ~= nil and last > 0
+                        local hasCurrent = current ~= nil and current > 0 and not isActiveMicro
+                        local sectorIsInvalid = appData.sectorsValid[i] == false
 
-local x
-for i=1, appData.sector_count do
-local basex = app.uiDecay * (i-1) + baseBasex
-local sectorInnerWidth = app.uiDecay - sectorInnerMargin * 2
-local mSectorWidth = (sectorInnerWidth - mSectorGap * (mSectorsCount - 1)) / mSectorsCount
-local firstMicroX = basex + sectorInnerMargin															
-ui.pushID(i)
--- Dibujar barras de microsectores
-for j=1, 8 do
-local best = appData.sectorsdata.microBest[i] and appData.sectorsdata.microBest[i][j]
-local last = appData.mSectorsLast[i] and appData.mSectorsLast[i][j]
-local current = appData.mSectors[i][j]
-local isActiveMicro = i == app.currentSector and j == appData.mSectorsCheck.current
-local hasBest = best ~= nil and best > 0
-local hasLast = last ~= nil and last > 0
-local hasCurrent = current ~= nil and current > 0 and not isActiveMicro
-local sectorIsInvalid = appData.sectorsValid[i] == false
+                        local baseColor
+                        if sectorIsInvalid then
+                                baseColor = UI_STYLE.invalid
+                        elseif not hasCurrent then
+                                baseColor = UI_STYLE.textSecondary
+                        elseif not hasBest then
+                                baseColor = UI_STYLE.best
+                        elseif current <= best then
+                                baseColor = UI_STYLE.best
+                        else
+                                local deltaBest = current - best
+                                if deltaBest < MICRO_DELTA_SMALL then
+                                        baseColor = UI_STYLE.invalid
+                                elseif hasLast and current < last then
+                                        baseColor = UI_STYLE.good
+                                else
+                                        baseColor = UI_STYLE.bad
+                                end
+                        end
 
-local baseColor
-if not hasCurrent or sectorIsInvalid then
-baseColor = MS_COLOR_GRAY
-elseif not hasBest then
-baseColor = MS_COLOR_BEST
-else
-if current <= best then
-baseColor = MS_COLOR_BEST
-else
-local deltaBest = current - best
-if deltaBest < MICRO_DELTA_SMALL then
-baseColor = MS_COLOR_ORANGE
-elseif hasLast and current < last then
-baseColor = MS_COLOR_GREEN
-else
-baseColor = MS_COLOR_RED
-end
-end
-end
-x = firstMicroX + (j-1) * (mSectorWidth + mSectorGap)
-local lineStart = vec2(x, basey)
-local lineEnd = vec2(x + mSectorWidth, basey)
-if i == app.currentSector and j == appData.mSectorsCheck.current then
-ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 12)
-                end
-                ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
+                        local chipX = firstX + (j - 1) * (chipWidth + chipGap)
+                        local chipMin = vec2(chipX, basey)
+                        local chipMax = vec2(chipX + chipWidth, basey + chipHeight)
 
-local hitPos = vec2(x+1, basey - 4)
-ui.setCursor(hitPos)
-        if ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(mSectorWidth, 8)) then
-        end
+                        ui.drawRectFilled(chipMin, chipMax, baseColor, 4)
+                        if isActiveMicro then
+                                ui.drawRect(chipMin, chipMax, UI_STYLE.accent, 4, 1.5)
+                        end
 
-        if ui.itemHovered() then
-                local currentText = hasCurrent and app.time_to_string(current) or "--.---"
-                local bestText = hasBest and app.time_to_string(best) or "--.---"
+                        ui.setCursor(chipMin)
+                        ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(chipWidth, chipHeight))
 
-                local sumCurrent = 0
-                if appData.mSectors[i] then
-                        for k = 1, 8 do
-                                local v = appData.mSectors[i][k]
-                                if v and v > 0 then sumCurrent = sumCurrent + v end
+                        if ui.itemHovered() then
+                                local currentText = hasCurrent and app.time_to_string(current) or "--.---"
+                                local bestText = hasBest and app.time_to_string(best) or "--.---"
+
+                                local sumCurrent = 0
+                                if appData.mSectors[i] then
+                                        for k = 1, 8 do
+                                                local v = appData.mSectors[i][k]
+                                                if v and v > 0 then sumCurrent = sumCurrent + v end
+                                        end
+                                end
+
+                                local sumLast = 0
+                                if appData.mSectorsLast[i] then
+                                        for k = 1, 8 do
+                                                local v = appData.mSectorsLast[i][k]
+                                                if v and v > 0 then sumLast = sumLast + v end
+                                        end
+                                end
+                                local sumCurrentText = sumCurrent > 0 and app.time_to_string(sumCurrent) or "--.---"
+                                local sumLastText = sumLast > 0 and app.time_to_string(sumLast) or "--.---"
+
+                                local deltaText = ""
+                                if hasBest and hasCurrent then
+                                        local delta = current - best
+                                        local sign = delta >= 0 and "+" or ""
+                                        deltaText = string.format("  Δ: %s%.3f", sign, delta)
+                                end
+
+                                local tooltip = string.format(
+                                        "Sector S%d micro %d\nActual: %s%s\nBest:   %s\n\nSum curr micros: %s\nSum last micros: %s",
+                                        i, j,
+                                        currentText,
+                                        deltaText,
+                                        bestText,
+                                        sumCurrentText,
+                                        sumLastText
+                                )
+                                ui.setTooltip(tooltip)
                         end
                 end
-
-                local sumLast = 0
-                if appData.mSectorsLast[i] then
-                        for k = 1, 8 do
-                                local v = appData.mSectorsLast[i][k]
-                                if v and v > 0 then sumLast = sumLast + v end
-                        end
-                end
-
-                local sumCurrentText = sumCurrent > 0 and app.time_to_string(sumCurrent) or "--.---"
-                local sumLastText = sumLast > 0 and app.time_to_string(sumLast) or "--.---"
-
-                local deltaText = ""
-                if hasBest and hasCurrent then
-                        local delta = current - best
-                        local sign = delta >= 0 and "+" or ""
-                        deltaText = string.format("  Δ: %s%.3f", sign, delta)
-                end
-
-                local tooltip = string.format(
-"Sector S%d micro %d\nActual: %s%s\nBest:   %s\n\nSum curr micros: %s\nSum last micros: %s",
- i, j,
- currentText,
- deltaText,
- bestText,
- sumCurrentText,
- sumLastText
- )
-                ui.setTooltip(tooltip)
+                ui.popID()
         end
-end
-
--- Línea divisoria vertical
-ui.drawSimpleLine(vec2(basex + app.uiDecay, basey-90), vec2(basex + app.uiDecay, basey+9), app.colors.GREY, 1)
-
--- Etiqueta del Sector (S1, S2...)
-
-local labelPos = vec2(basex + app.uiDecay - 20, basey + 8)  -- ajustá el 24 a gusto
-ui.setCursor(labelPos)
-if appData.sectorsValid[i] then
-ui.dwriteText("S"..i, 15, app.colors.GREEN)
-else
-ui.dwriteText("S"..i, 15, app.colors.ORANGE)
-end
-
-
--- === BOTÓN DE GUARDAR PUNTO DE RETORNO ===
-local savePos = vec2(basex + app.uiDecay - 70, basey + 8)
-ui.setCursor(savePos)
-ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.9, 0.9, 0.3, 1))  -- color “amarillo”
-if ui.iconButton(ui.Icons.Save, vec2(18, 18)) then
-app.saveSectorState(i)
-end
-ui.popStyleColor()
-
-if ui.itemHovered() then
-ui.setTooltip("Guardar punto de retorno para Sector "..i.." desde la posición actual")
-end
-
--- === BOTÓN DE RETORNO (igual que antes) ===
-local btnPos = vec2(basex + app.uiDecay - 45, basey + 8)
-ui.setCursor(btnPos)
-
-local hasState = app.sectorStates[i] ~= nil
-local btnColor = hasState and rgbm(0, 1, 0, 1) or rgbm(1, 1, 1, 0.2)
-
-ui.pushStyleColor(ui.StyleColor.Text, btnColor)
-if ui.iconButton(ui.Icons.Restart, vec2(18, 18)) then
-if hasState then
-app.teleportToSector(i)
-else
-ui.toast(ui.Icons.Warning, "Todavía no guardaste el punto de retorno del Sector "..i)
-end
-end
-ui.popStyleColor()
-
-
-if ui.itemHovered() then
-if hasState then
-ui.setTooltip("Reiniciar Sector "..i)
-else
-ui.setTooltip("Punto de retorno no guardado aún.\nPasa por este sector para activarlo.")
-end
-end
-
-ui.popID()
-end
-
--- Línea inferior
-ui.drawSimpleLine(vec2(0, basey+28), vec2(x+mSectorWidth, basey+28), app.colors.GREY, 1)
 end
 
 local function idealSectorTimeAtCurrentPos(sectorIndex)
@@ -1051,35 +1000,46 @@ end
 
 
 function windowMainSettings(dt)
-        local controlWidth = 160
-        ui.text("Return button:")
+        ui.pushDWriteFont(UI_STYLE.fontMain)
+
+        local controlWidth = 170
+        ui.dwriteText('Sectors Practice Settings', 16, UI_STYLE.textPrimary)
+        ui.offsetCursorY(8)
+        ui.dwriteText('Control bindings', 13, UI_STYLE.textSecondary)
+        ui.offsetCursorY(4)
+        ui.dwriteText('Return button:', 12, UI_STYLE.textPrimary)
         ui.sameLine(140)
         returnButton:control(vec2(controlWidth, 0))
         if ui.itemHovered() then
             ui.setTooltip("Teleports to the last saved/used return point.")
         end
 
-        ui.text("Save Return button:")
+        ui.dwriteText('Save Return button:', 12, UI_STYLE.textPrimary)
         ui.sameLine(140)
         saveReturnButton:control(vec2(controlWidth, 0))
         if ui.itemHovered() then
             ui.setTooltip("Saves a return point for the next sector.")
         end
 
+        ui.offsetCursorY(6)
         ui.separator()
-        ui.text("Edit sector target")
+        ui.dwriteText('Targets', 13, UI_STYLE.textSecondary)
+        ui.offsetCursorY(2)
         for i=1, appData.sector_count do
-                ui.pushItemWidth(80)
+                ui.pushItemWidth(90)
                 local v, vChanged = ui.inputText('Sector '..i, appData.sectorsdata.target[i], 0)
                 if vChanged and tonumber(v) ~= nil and tonumber(v) > 0 then
-			appData.sectorsdata.target[i] = v
-			app.saveCarData()
-		end
+                        appData.sectorsdata.target[i] = v
+                        app.saveCarData()
+                end
         end
+
+        ui.offsetCursorY(4)
         ui.separator()
-        ui.dwriteText('Session:', 12)
-        ui.sameLine(80)
-        ui.dwriteText(app.isOnline and 'Online' or 'Offline', 12)
+        ui.dwriteText('Session:', 12, UI_STYLE.textSecondary)
+        ui.sameLine(120)
+        ui.dwriteText(app.isOnline and 'Online' or 'Offline', 12, UI_STYLE.textPrimary)
+
         if ui.checkbox('Show ghost line', app.userData.settings.showGhostLine) then
                 app.userData.settings.showGhostLine = not app.userData.settings.showGhostLine
                 app.saveSettings(false)
@@ -1088,48 +1048,102 @@ function windowMainSettings(dt)
                 app.userData.settings.showGhostCar = not app.userData.settings.showGhostCar
                 app.saveSettings(false)
         end
-    -- ... (resto de settings igual) ...
-    if ui.checkbox('Force save CM personnal best', app.userData.settings.savepb) then
+        if ui.checkbox('Force save CM personnal best', app.userData.settings.savepb) then
                 app.userData.settings.savepb = not app.userData.settings.savepb
                 if app.userData.settings.savepb then app.savePersonalBest(appData.pb) end
                 app.saveSettings(false)
         end
+        ui.popDWriteFont()
 end
 
 -- Función principal de dibujado
 function script.main(dt)
-	ui.pushDWriteFont(app.font)
+        ui.pushDWriteFont(UI_STYLE.fontMain)
 
-	local tSize = 13
-	local title = app.title
-	if app.sNotif ~= "" then title = string.format("%s - %s", title, app.sNotif) end
-	ac.setWindowTitle('sectors', title)
-	ac.setWindowBackground('sectors', app.colors.DARK_GREY)
+        local title = app.title
+        if app.sNotif ~= "" then title = string.format("%s - %s", title, app.sNotif) end
+        ac.setWindowTitle('sectors', title)
+        ac.setWindowBackground('sectors', UI_STYLE.bg)
 
-	local lSum, bSum, tSum = 0, 0, 0
-	local hasLast, hastTgt = true, true
-	
-	-- === Fila Live (tiempo en vivo del sector + delta) ===
-	ui.offsetCursorX(-10)
-	ui.offsetCursorY(-3)
-        ui.dwriteText("Live", tSize)
+        local lSum, bSum, tSum = 0, 0, 0
+        local hasLast, hastTgt = true, true
 
-        for i = 1, appData.sector_count do
-                ui.sameLine(i * app.uiDecay - 70, 0)
+        local sectorCount = appData.sector_count
+        local cardWidth = 182
+        local cardHeight = 194
+        local headerHeight = 36
+        local padding = UI_STYLE.cardPadding
+        local columnGap = UI_STYLE.columnGap
+        local rowGap = UI_STYLE.rowGap
 
+        local totalWidth = padding * 2 + (cardWidth + columnGap) * sectorCount - columnGap
+        local headerPos = vec2(padding, padding)
+        local headerSize = vec2(totalWidth, headerHeight)
+
+        ui.drawRectFilled(headerPos, headerPos + headerSize, UI_STYLE.panel, UI_STYLE.cardRadius)
+        ui.setCursor(headerPos + vec2(10, 8))
+        ui.dwriteText(title, 15, UI_STYLE.textPrimary)
+
+        local settingsSize = vec2(22, 22)
+        local settingsPos = headerPos + vec2(headerSize.x - settingsSize.x - 8, (headerHeight - settingsSize.y) / 2)
+        ui.setCursor(settingsPos)
+        if ui.invisibleButton('settings_button', settingsSize) then
+                pcall(function() ac.setWindowOpen('main_settings', true) end)
+        end
+        local gearColor = ui.itemHovered() and UI_STYLE.accent or UI_STYLE.textSecondary
+        local gearCenter = settingsPos + vec2(settingsSize.x / 2, settingsSize.y / 2)
+        ui.drawRect(settingsPos, settingsPos + settingsSize, gearColor, 5, 1.2)
+        ui.drawLine(vec2(gearCenter.x - 6, gearCenter.y), vec2(gearCenter.x + 6, gearCenter.y), gearColor, 1.5)
+        ui.drawLine(vec2(gearCenter.x, gearCenter.y - 6), vec2(gearCenter.x, gearCenter.y + 6), gearColor, 1.5)
+        ui.drawCircleFilled(gearCenter, 3, gearColor)
+        if ui.itemHovered() then
+                ui.setTooltip('Open settings')
+        end
+
+        local bodyTop = headerPos.y + headerHeight + rowGap
+        if CAR.wheelsOutside > app.userData.settings.allowedTyresOut then
+                ui.setCursor(vec2(padding, bodyTop - 6))
+                ui.dwriteText('Off track!', 12, UI_STYLE.invalid)
+        end
+
+        local cardsLayout = {}
+
+        for i = 1, sectorCount do
+                local cardX = padding + (cardWidth + columnGap) * (i - 1)
+                local cardY = bodyTop
+                local cardPos = vec2(cardX, cardY)
+                local cardSize = vec2(cardWidth, cardHeight)
+                local microY = cardY + cardHeight - UI_STYLE.cardPadding - 12
+                table.insert(cardsLayout, { index = i, x = cardX, y = cardY, width = cardWidth, height = cardHeight, microY = microY })
+
+                local isCurrent = app.currentSector == i
+                local borderColor = isCurrent and UI_STYLE.accent or UI_STYLE.textSecondary
+                ui.drawRectFilled(cardPos, cardPos + cardSize, UI_STYLE.panel, UI_STYLE.cardRadius)
+                ui.drawRect(cardPos, cardPos + cardSize, borderColor, UI_STYLE.cardRadius, isCurrent and 2 or 1)
+
+                local innerX = cardX + padding
+                local lineY = cardY + padding
+                ui.setCursor(vec2(innerX, lineY))
+                local sectorValid = appData.sectorsValid[i] ~= false
+                ui.dwriteText('S'..i, 14, isCurrent and UI_STYLE.accent or UI_STYLE.textPrimary)
+                ui.sameLine(innerX + 26)
+                ui.dwriteText(sectorValid and 'Ready' or 'Invalid', 12, sectorValid and UI_STYLE.textSecondary or UI_STYLE.invalid)
+
+                lineY = lineY + 18
                 local timeNow = (i == app.liveSector) and app.currentSectorTimer or 0
                 local timeStr = app.time_to_string(timeNow)
                 if i == app.liveSector and timeNow > 0 and appData.sectorsValid[i] == false then
-                        timeStr = timeStr .. "*"
+                        timeStr = timeStr .. '*'
                 end
-                ui.dwriteText(timeStr, tSize, app.colors.CYAN)
+                ui.setCursor(vec2(innerX, lineY))
+                ui.dwriteText('Live', 12, UI_STYLE.textSecondary)
+                ui.pushDWriteFont(UI_STYLE.fontNumbers)
+                ui.setCursor(vec2(innerX + 46, lineY - 4))
+                ui.dwriteText(timeStr, 18, UI_STYLE.textPrimary)
+                ui.popDWriteFont()
 
-                -- Delta respecto al BEST del sector
-                ui.sameLine(i * app.uiDecay - 17, 0)
-
-                local deltaColor = app.colors.GREY
-                local deltaText = "inv"
-
+                local deltaColor = UI_STYLE.textSecondary
+                local deltaText = 'inv'
                 if i == app.liveSector and timeNow > 0 then
                         local refTime = ghostTimeAtCurrentPos(i)
                         if refTime == nil then
@@ -1137,115 +1151,171 @@ function script.main(dt)
                         end
                         if refTime ~= nil then
                                 local delta = timeNow - refTime
-                                deltaColor = (delta <= 0) and app.colors.GREEN or app.colors.RED
-                                deltaText = string.format("%+.3fs", delta)
+                                deltaColor = (delta <= 0) and UI_STYLE.good or UI_STYLE.bad
+                                deltaText = string.format('%+.3fs', delta)
                         end
                 end
+                ui.setCursor(vec2(innerX + 118, lineY))
+                ui.dwriteText(deltaText, 13, deltaColor)
 
-                ui.dwriteText(deltaText, tSize - 1, deltaColor)
-        end
-        -- Fila Current (Last)
-        ui.offsetCursorX(-10)
-        ui.offsetCursorY(-3)
-        ui.dwriteText("Last", tSize)
-	for i=1, appData.sector_count do
-		ui.sameLine(i*app.uiDecay - 70, 0)
+                lineY = lineY + 30
                 local lastTime = appData.current_sectors[i]
                 local lastStr = app.time_to_string(lastTime)
-                if lastTime > 0 and appData.sectorsValid[i] == false then
-                        lastStr = lastStr .. "*"
+                if lastTime and lastTime > 0 and appData.sectorsValid[i] == false then
+                        lastStr = lastStr .. '*'
                 end
-                if app.currentSector == i then
-                        ui.dwriteTextHyperlink(lastStr, tSize, app.colors.WHITE)
-                else
-                        ui.dwriteText(lastStr, tSize)
-                end
+                ui.setCursor(vec2(innerX, lineY))
+                ui.dwriteText('Last', 12, UI_STYLE.textSecondary)
+                ui.pushDWriteFont(UI_STYLE.fontNumbers)
+                ui.setCursor(vec2(innerX + 46, lineY - 4))
+                ui.dwriteText(lastStr, 16, UI_STYLE.textPrimary)
+                ui.popDWriteFont()
 
-                color = app.colors.GREY
-                if appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 or appData.sectorsdata.best[i] == nil or appData.sectorsdata.best[i] == 0 then
-                        app.delta = 'inv'
+                local lastColor = UI_STYLE.textSecondary
+                local lastDelta = 'inv'
+                if lastTime == nil or lastTime == 0 or appData.sectorsdata.best[i] == nil or appData.sectorsdata.best[i] == 0 then
                         hasLast = false
                 else
-                        app.delta = appData.current_sectors[i] - appData.sectorsdata.best[i]
-                        color = app.delta <= 0 and app.colors.GREEN or app.colors.RED
-                        app.delta = string.format("%+.3fs", app.delta)
+                        local delta = lastTime - appData.sectorsdata.best[i]
+                        lastColor = delta <= 0 and UI_STYLE.good or UI_STYLE.bad
+                        lastDelta = string.format('%+.3fs', delta)
                 end
-                ui.sameLine(i*app.uiDecay - 17, 0)
-                ui.dwriteText(app.delta, tSize-1, color)
-                lSum = lSum + appData.current_sectors[i]
+                ui.setCursor(vec2(innerX + 118, lineY))
+                ui.dwriteText(lastDelta, 12, lastColor)
+                lSum = lSum + (lastTime or 0)
+
+                lineY = lineY + 26
+                ui.setCursor(vec2(innerX, lineY))
+                ui.dwriteText('Best', 12, UI_STYLE.textSecondary)
+                ui.pushDWriteFont(UI_STYLE.fontNumbers)
+                ui.setCursor(vec2(innerX + 46, lineY - 4))
+                local bestValue = appData.sectorsdata.best[i]
+                ui.dwriteText(app.time_to_string(bestValue), 15, UI_STYLE.best)
+                if ui.itemClicked(ui.MouseButton.Right) then
+                        ui.modalPrompt('Reset Best time', 'Set best sector '..i..' time to', bestValue, function (value)
+                                if value then appData.sectorsdata.best[i] = tonumber(value); app.saveCarData() end
+                        end)
+                end
+                ui.popDWriteFont()
+                if bestValue > 0 then
+                        local delta = bestValue - (appData.sectorsdata.target[i] or 0)
+                        local color = delta <= 0 and UI_STYLE.invalid or UI_STYLE.textSecondary
+                        local deltaText = delta > 80 and 'inv' or string.format('%.3fs', delta)
+                        ui.setCursor(vec2(innerX + 118, lineY))
+                        ui.dwriteText(deltaText, 12, color)
+                        bSum = bSum + appData.sectorsdata.best[i]
+                end
+
+                lineY = lineY + 22
+                ui.setCursor(vec2(innerX, lineY))
+                ui.dwriteText('Target', 12, UI_STYLE.textSecondary)
+                ui.pushDWriteFont(UI_STYLE.fontNumbers)
+                ui.setCursor(vec2(innerX + 46, lineY - 4))
+                ui.dwriteText(app.time_to_string(appData.sectorsdata.target[i]), 15, UI_STYLE.textPrimary)
+                ui.popDWriteFont()
+                if appData.sectorsdata.target[i] == nil or appData.sectorsdata.target[i] == 0 then hastTgt = false end
+                tSum = tSum + (appData.sectorsdata.target[i] or 0)
+
+                local buttonY = microY - 34
+                local savePos = vec2(innerX, buttonY)
+                local btnSize = vec2(26, 26)
+                ui.setCursor(savePos)
+                if ui.invisibleButton('save_sec_'..i, btnSize) then
+                        app.saveSectorState(i)
+                end
+                local saveHovered = ui.itemHovered()
+                local saveColor = saveHovered and UI_STYLE.accent or UI_STYLE.textSecondary
+                ui.drawRectFilled(savePos, savePos + btnSize, UI_STYLE.panel, 4)
+                ui.drawRect(savePos, savePos + btnSize, saveColor, 4, 1.2)
+                local midX = savePos.x + btnSize.x / 2
+                ui.drawLine(vec2(midX, savePos.y + 5), vec2(midX, savePos.y + 16), saveColor, 1.6)
+                ui.drawTriangleFilled(vec2(midX - 5, savePos.y + 14), vec2(midX + 5, savePos.y + 14), vec2(midX, savePos.y + 20), saveColor)
+                ui.drawRect(vec2(savePos.x + 6, savePos.y + 17), vec2(savePos.x + btnSize.x - 6, savePos.y + 21), saveColor, 2, 1.3)
+                if saveHovered then
+                        ui.setTooltip('Guardar punto de retorno para Sector '..i..' desde la posición actual')
+                end
+
+                local returnPos = vec2(innerX + btnSize.x + 8, buttonY)
+                ui.setCursor(returnPos)
+                local hasState = app.sectorStates[i] ~= nil
+                if ui.invisibleButton('return_sec_'..i, btnSize) then
+                        if hasState then
+                                app.teleportToSector(i)
+                        else
+                                ui.toast(ui.Icons.Warning, 'Todavía no guardaste el punto de retorno del Sector '..i)
+                        end
+                end
+                local returnHovered = ui.itemHovered()
+                local returnColor = returnHovered and UI_STYLE.accent or (hasState and UI_STYLE.good or UI_STYLE.textSecondary)
+                ui.drawRectFilled(returnPos, returnPos + btnSize, UI_STYLE.panel, 4)
+                ui.drawRect(returnPos, returnPos + btnSize, returnColor, 4, 1.2)
+                ui.drawLine(vec2(returnPos.x + 7, returnPos.y + 8), vec2(returnPos.x + 18, returnPos.y + 8), returnColor, 1.6)
+                ui.drawLine(vec2(returnPos.x + 7, returnPos.y + 18), vec2(returnPos.x + 18, returnPos.y + 8), returnColor, 1.6)
+                ui.drawTriangleFilled(vec2(returnPos.x + 4, returnPos.y + 13), vec2(returnPos.x + 12, returnPos.y + 5), vec2(returnPos.x + 12, returnPos.y + 21), returnColor)
+                if returnHovered then
+                        if hasState then
+                                ui.setTooltip('Reiniciar Sector '..i)
+                        else
+                                ui.setTooltip('Punto de retorno no guardado aún.\nPasa por este sector para activarlo.')
+                        end
+                end
         end
 
-	-- Fila Best
-	ui.offsetCursorX(-10)
-	ui.dwriteText("Best", tSize)
-	for i=1, appData.sector_count do
-		ui.sameLine(i*app.uiDecay - 70, 0)
-		ui.dwriteText(app.time_to_string(appData.sectorsdata.best[i]), tSize, app.colors.PURPLE)
-		if ui.itemClicked(ui.MouseButton.Right) then
-			ui.modalPrompt('Reset Best time', 'Set best sector '..i..' time to', appData.sectorsdata.best[i], function (value)
-				if value then appData.sectorsdata.best[i] = tonumber(value); app.saveCarData() end
-			end)
-		end
-		if appData.sectorsdata.best[i] > 0 then
-			color = app.colors.GREY
-			app.delta = appData.sectorsdata.best[i] - appData.sectorsdata.target[i]
-			if app.delta <= 0 then color = app.colors.ORANGE end
-			if app.delta > 80 then app.delta = "inv" else app.delta = string.format("%.3fs", app.delta) end
-			ui.sameLine(i*app.uiDecay - 17, 0)
-			ui.dwriteText(app.delta, tSize-1, color)
-			bSum = bSum + appData.sectorsdata.best[i]
-		end
-	end
+        drawmSectors(dt, cardsLayout)
 
-	-- Fila Target
-	ui.offsetCursorX(-10)
-	ui.dwriteText("Tgt", tSize)
-	for i=1, appData.sector_count do
-		ui.sameLine(i*app.uiDecay - 70, 0)
-		ui.dwriteText(app.time_to_string(appData.sectorsdata.target[i]), tSize, app.colors.YELLOW)
-		if appData.sectorsdata.target[i] == nil or appData.sectorsdata.target[i] == 0 then hastTgt = false end
-		tSum = tSum + appData.sectorsdata.target[i]
-	end
+        local footerY = bodyTop + cardHeight + rowGap
+        local footerHeight = 70
+        ui.drawRectFilled(vec2(padding, footerY), vec2(padding + totalWidth, footerY + footerHeight), UI_STYLE.panel, UI_STYLE.cardRadius)
+        local colSpacing = (totalWidth - 24) / 4
+        local col1 = padding + 12
+        local col2 = col1 + colSpacing
+        local col3 = col2 + colSpacing
+        local col4 = col3 + colSpacing
 
-	ui.offsetCursor(vec2(-10, 12))
-	if CAR.wheelsOutside > app.userData.settings.allowedTyresOut then
-		ui.dwriteText("off track!", tSize, app.colors.RED)
-	else
-		ui.dwriteText(" ", tSize, app.colors.RED)
-	end
+        ui.setCursor(vec2(col1, footerY + 8))
+        ui.dwriteText('Last lap', 12, UI_STYLE.textSecondary)
+        ui.pushDWriteFont(UI_STYLE.fontNumbers)
+        ui.setCursor(vec2(col1, footerY + 22))
+        ui.dwriteText(app.time_to_string(app.sessionLastLapMs/1000), 16, UI_STYLE.textPrimary)
+        ui.popDWriteFont()
 
-    -- DIBUJAR BARRAS Y BOTONES AQUI
-	drawmSectors(dt)
+        ui.setCursor(vec2(col2, footerY + 8))
+        ui.dwriteText('Session best', 12, UI_STYLE.textSecondary)
+        ui.pushDWriteFont(UI_STYLE.fontNumbers)
+        ui.setCursor(vec2(col2, footerY + 22))
+        ui.dwriteText(app.time_to_string(app.sessionBestLapMs/1000), 16, UI_STYLE.textPrimary)
+        ui.popDWriteFont()
 
-    -- Footer stats
-	ui.offsetCursor(vec2(-10, -1))
-	ui.dwriteText("Last: "..app.time_to_string(app.sessionLastLapMs/1000), tSize, app.colors.GREY)
-	ui.sameLine(120)
-	ui.dwriteText("Sess Best: "..app.time_to_string(app.sessionBestLapMs/1000), tSize, app.colors.GREY)
-	ui.sameLine(260)
-	if appData.pb and appData.pb ~= math.huge then
-		ui.dwriteText("Record: "..app.time_to_string(appData.pb/1000), tSize, app.colors.GREY)
-	else
-		ui.dwriteText("Record: "..app.time_to_string(0), tSize, app.colors.GREY)
-	end
+        ui.setCursor(vec2(col3, footerY + 8))
+        ui.dwriteText('Record', 12, UI_STYLE.textSecondary)
+        ui.pushDWriteFont(UI_STYLE.fontNumbers)
+        ui.setCursor(vec2(col3, footerY + 22))
+        if appData.pb and appData.pb ~= math.huge then
+                ui.dwriteText(app.time_to_string(appData.pb/1000), 16, UI_STYLE.best)
+        else
+                ui.dwriteText(app.time_to_string(0), 16, UI_STYLE.textSecondary)
+        end
+        ui.popDWriteFont()
 
-	ui.offsetCursor(vec2(-10, -4))
-	ui.dwriteText("Target: "..app.time_to_string(tSum), tSize-2, app.colors.YELLOW)
-	ui.sameLine(120)
-	if hastTgt then
-		ui.dwriteText(string.format('Theoric: %s  %.3fs', app.time_to_string(bSum), bSum - tSum), tSize-2, app.colors.PURPLE)
-	else
-		ui.dwriteText(string.format('Theoric: %s', app.time_to_string(bSum)), tSize-2, app.colors.PURPLE)
-	end
+        ui.setCursor(vec2(col4, footerY + 8))
+        ui.dwriteText('Target', 12, UI_STYLE.textSecondary)
+        ui.pushDWriteFont(UI_STYLE.fontNumbers)
+        ui.setCursor(vec2(col4, footerY + 22))
+        ui.dwriteText(app.time_to_string(tSum), 16, UI_STYLE.textPrimary)
+        ui.popDWriteFont()
+
+        ui.setCursor(vec2(col4, footerY + 42))
+        ui.dwriteText('Theoric', 11, UI_STYLE.textSecondary)
+        local theorText = hastTgt and string.format('%s  %.3fs', app.time_to_string(bSum), bSum - tSum) or app.time_to_string(bSum)
+        ui.setCursor(vec2(col4, footerY + 54))
+        ui.dwriteText(theorText, 13, UI_STYLE.best)
 
         if hasLast then
-                ui.sameLine(260)
-                ui.dwriteText(string.format('Last: %.3fs', lSum - bSum), tSize-2, app.colors.GREY)
+                ui.setCursor(vec2(col2, footerY + 42))
+                ui.dwriteText('Last Δ', 11, UI_STYLE.textSecondary)
+                ui.setCursor(vec2(col2, footerY + 54))
+                ui.dwriteText(string.format('%.3fs', lSum - bSum), 13, UI_STYLE.textSecondary)
         end
-
-        local ghost = app.ghostSectors[app.currentSector]
-        ui.offsetCursor(vec2(-10, 4))
-        --ui.dwriteText(string.format('Ghost S%d: %d pts', app.currentSector, ghost and #ghost or 0), 10, app.colors.GREY)
 
         ui.popDWriteFont()
 end
