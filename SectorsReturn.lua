@@ -832,7 +832,7 @@ end
 local MICRO_DELTA_SMALL = 0.10
 local MS_COLOR_BEST = app.colors.PURPLE
 local MS_COLOR_GREEN = app.colors.GREEN
-local MS_COLOR_ORANGE = app.colors.ORANGE
+local MS_COLOR_ORANGE = app.colors.YELLOW
 local MS_COLOR_RED = app.colors.RED
 local MS_COLOR_GRAY = app.colors.MID_GREY
 local MS_COLOR_HIGHLIGHT = app.colors.CYAN
@@ -855,57 +855,85 @@ for j=1, 8 do
 local best = appData.sectorsdata.microBest[i] and appData.sectorsdata.microBest[i][j]
 local last = appData.mSectorsLast[i] and appData.mSectorsLast[i][j]
 local current = appData.mSectors[i][j]
+local isActiveMicro = i == app.currentSector and j == appData.mSectorsCheck.current
 local hasBest = best ~= nil and best > 0
 local hasLast = last ~= nil and last > 0
-local hasCurrent = current ~= nil and current > 0
-local deltaBest = hasBest and hasCurrent and (current - best) or nil
+local hasCurrent = current ~= nil and current > 0 and not isActiveMicro
 local sectorIsInvalid = appData.sectorsValid[i] == false
 
 local baseColor
-if not hasBest or not hasCurrent or sectorIsInvalid then
+if not hasCurrent or sectorIsInvalid then
 baseColor = MS_COLOR_GRAY
-elseif current < best then
+elseif not hasBest then
 baseColor = MS_COLOR_BEST
+else
+if current <= best then
+baseColor = MS_COLOR_BEST
+else
+local deltaBest = current - best
+if deltaBest < MICRO_DELTA_SMALL then
+baseColor = MS_COLOR_ORANGE
 elseif hasLast and current < last then
 baseColor = MS_COLOR_GREEN
-elseif deltaBest ~= nil and deltaBest < MICRO_DELTA_SMALL then
-baseColor = MS_COLOR_ORANGE
 else
 baseColor = MS_COLOR_RED
 end
+end
+end
 x = basex + (j-1)*mSectorWidth
 local lineStart = vec2(x+1, basey)
-local lineEnd = vec2(x+mSectorWidth, basey)
+local lineEnd = vec2(x + mSectorWidth - 1, basey)
 if i == app.currentSector and j == appData.mSectorsCheck.current then
 ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 12)
-end
-ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
+                end
+                ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
 
 local hitPos = vec2(x+1, basey - 4)
 ui.setCursor(hitPos)
-if ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(mSectorWidth, 8)) then
-end
+        if ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(mSectorWidth, 8)) then
+        end
 
-if ui.itemHovered() then
-local currentText = hasCurrent and app.time_to_string(current) or "--.---"
-local bestText = hasBest and app.time_to_string(best) or "--.---"
+        if ui.itemHovered() then
+                local currentText = hasCurrent and app.time_to_string(current) or "--.---"
+                local bestText = hasBest and app.time_to_string(best) or "--.---"
 
-local deltaText = ""
-if hasBest and hasCurrent then
-local delta = current - best
-local sign = delta >= 0 and "+" or ""
-deltaText = string.format("  Δ: %s%.3f", sign, delta)
-end
+                local sumCurrent = 0
+                if appData.mSectors[i] then
+                        for k = 1, 8 do
+                                local v = appData.mSectors[i][k]
+                                if v and v > 0 then sumCurrent = sumCurrent + v end
+                        end
+                end
 
-local tooltip = string.format(
-"Sector S%d micro %d\nActual: %s%s\nBest:   %s",
+                local sumLast = 0
+                if appData.mSectorsLast[i] then
+                        for k = 1, 8 do
+                                local v = appData.mSectorsLast[i][k]
+                                if v and v > 0 then sumLast = sumLast + v end
+                        end
+                end
+
+                local sumCurrentText = sumCurrent > 0 and app.time_to_string(sumCurrent) or "--.---"
+                local sumLastText = sumLast > 0 and app.time_to_string(sumLast) or "--.---"
+
+                local deltaText = ""
+                if hasBest and hasCurrent then
+                        local delta = current - best
+                        local sign = delta >= 0 and "+" or ""
+                        deltaText = string.format("  Δ: %s%.3f", sign, delta)
+                end
+
+                local tooltip = string.format(
+"Sector S%d micro %d\nActual: %s%s\nBest:   %s\n\nSum curr micros: %s\nSum last micros: %s",
 i, j,
 currentText,
 deltaText,
-bestText
+bestText,
+sumCurrentText,
+sumLastText
 )
-ui.setTooltip(tooltip)
-end
+                ui.setTooltip(tooltip)
+        end
 end
 
 -- Línea divisoria vertical
@@ -957,7 +985,8 @@ if ui.itemHovered() then
 if hasState then
 ui.setTooltip("Reiniciar Sector "..i)
 else
-ui.setTooltip("Punto de retorno no guardado aún.\nPasa por este sector para activarlo.")
+ui.setTooltip("Punto de retorno no guardado aún.
+Pasa por este sector para activarlo.")
 end
 end
 
