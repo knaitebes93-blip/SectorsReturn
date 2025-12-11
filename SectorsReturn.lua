@@ -115,11 +115,11 @@ app.set_microSectors = function()
                 end
         end
 
-	appData.mSectorsCheck = {
-		current = 1,
-		isValid = true,
-		startTime = 0
-	}
+        appData.mSectorsCheck = {
+                current = 1,
+                isValid = true,
+                startTime = (CAR.lapTimeMs or 0) / 1000
+        }
 end
 
 local function copyCurrentMicroToLast(sectorIndex)
@@ -1284,7 +1284,7 @@ local function finalizeCurrentMicroTime(sectorIndex, nowLapTimeSec, microIndex)
         local prevIndex = microIndex or appData.mSectorsCheck.current
         if not prevIndex or prevIndex < 1 or prevIndex > 8 then return end
 
-        if not appData.mSectorsCheck.startTime or appData.mSectorsCheck.startTime <= 0 then return end
+        if appData.mSectorsCheck.startTime == nil then return end
 
         local endTimeSec = nowLapTimeSec or ((CAR.lapTimeMs or 0) / 1000)
         local duration = endTimeSec - appData.mSectorsCheck.startTime
@@ -1304,7 +1304,7 @@ local function mSectorsStep(currentSector)
                         local newIndex = i+1
                         if newIndex ~= appData.mSectorsCheck.current then
                                 local prevIndex = appData.mSectorsCheck.current
-                                if prevIndex >= 1 and prevIndex <= 8 and appData.mSectorsCheck.startTime > 0 then
+                                if prevIndex >= 1 and prevIndex <= 8 and appData.mSectorsCheck.startTime ~= nil then
                                         local t = nowLapTimeSec - appData.mSectorsCheck.startTime
                                         if t < 0 then t = 0 end
                                         storeMicroTime(currentSector, prevIndex, t)
