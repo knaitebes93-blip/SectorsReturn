@@ -285,8 +285,8 @@ app.init = function()
         appData.sectorsdata.microBest = appData.sectorsdata.microBest or {}
         for i=1, appData.sector_count do
                 appData.current_sectors[i] = 0
-                appData.sectorsdata.best[i] = appData.sectorsdata.best[i] or 0
-                appData.sectorsdata.target[i] = appData.sectorsdata.target[i] or 0
+                appData.sectorsdata.best[i] = tonumber(appData.sectorsdata.best[i]) or 0
+                appData.sectorsdata.target[i] = tonumber(appData.sectorsdata.target[i]) or 0
                 appData.sectorsdata.microBest[i] = appData.sectorsdata.microBest[i] or {}
                 appData.mSectorsLast[i] = appData.mSectorsLast[i] or {}
                 appData.sectorsValid[i] = true
@@ -1027,10 +1027,14 @@ function windowMainSettings(dt)
         ui.offsetCursorY(2)
         for i=1, appData.sector_count do
                 ui.pushItemWidth(90)
-                local v, vChanged = ui.inputText('Sector '..i, appData.sectorsdata.target[i], 0)
-                if vChanged and tonumber(v) ~= nil and tonumber(v) > 0 then
-                        appData.sectorsdata.target[i] = v
-                        app.saveCarData()
+                local currentTarget = tonumber(appData.sectorsdata.target[i]) or 0
+                local v, vChanged = ui.inputText('Sector '..i, string.format('%.3f', currentTarget), 0)
+                if vChanged then
+                        local num = tonumber(v)
+                        if num and num > 0 then
+                                appData.sectorsdata.target[i] = num
+                                app.saveCarData()
+                        end
                 end
         end
 
@@ -1160,6 +1164,7 @@ function script.main(dt)
 
                 lineY = lineY + 30
                 local lastTime = appData.current_sectors[i]
+                local bestValue = tonumber(appData.sectorsdata.best[i]) or 0
                 local lastStr = app.time_to_string(lastTime)
                 if lastTime and lastTime > 0 and appData.sectorsValid[i] == false then
                         lastStr = lastStr .. '*'
@@ -1173,10 +1178,10 @@ function script.main(dt)
 
                 local lastColor = UI_STYLE.textSecondary
                 local lastDelta = 'inv'
-                if lastTime == nil or lastTime == 0 or appData.sectorsdata.best[i] == nil or appData.sectorsdata.best[i] == 0 then
+                if lastTime == nil or lastTime == 0 or bestValue == 0 then
                         hasLast = false
                 else
-                        local delta = lastTime - appData.sectorsdata.best[i]
+                        local delta = lastTime - bestValue
                         lastColor = delta <= 0 and UI_STYLE.good or UI_STYLE.bad
                         lastDelta = string.format('%+.3fs', delta)
                 end
@@ -1189,7 +1194,6 @@ function script.main(dt)
                 ui.dwriteText('Best', 12, UI_STYLE.textSecondary)
                 ui.pushDWriteFont(UI_STYLE.fontNumbers)
                 ui.setCursor(vec2(innerX + 46, lineY - 4))
-                local bestValue = appData.sectorsdata.best[i]
                 ui.dwriteText(app.time_to_string(bestValue), 15, UI_STYLE.best)
                 if ui.itemClicked(ui.MouseButton.Right) then
                         ui.modalPrompt('Reset Best time', 'Set best sector '..i..' time to', bestValue, function (value)
@@ -1198,12 +1202,13 @@ function script.main(dt)
                 end
                 ui.popDWriteFont()
                 if bestValue > 0 then
-                        local delta = bestValue - (appData.sectorsdata.target[i] or 0)
+                        local targetVal = tonumber(appData.sectorsdata.target[i]) or 0
+                        local delta = bestValue - targetVal
                         local color = delta <= 0 and UI_STYLE.invalid or UI_STYLE.textSecondary
                         local deltaText = delta > 80 and 'inv' or string.format('%.3fs', delta)
                         ui.setCursor(vec2(innerX + 118, lineY))
                         ui.dwriteText(deltaText, 12, color)
-                        bSum = bSum + appData.sectorsdata.best[i]
+                        bSum = bSum + bestValue
                 end
 
                 lineY = lineY + 22
@@ -1211,10 +1216,11 @@ function script.main(dt)
                 ui.dwriteText('Target', 12, UI_STYLE.textSecondary)
                 ui.pushDWriteFont(UI_STYLE.fontNumbers)
                 ui.setCursor(vec2(innerX + 46, lineY - 4))
-                ui.dwriteText(app.time_to_string(appData.sectorsdata.target[i]), 15, UI_STYLE.textPrimary)
+                local targetVal = tonumber(appData.sectorsdata.target[i]) or 0
+                ui.dwriteText(app.time_to_string(targetVal), 15, UI_STYLE.textPrimary)
                 ui.popDWriteFont()
-                if appData.sectorsdata.target[i] == nil or appData.sectorsdata.target[i] == 0 then hastTgt = false end
-                tSum = tSum + (appData.sectorsdata.target[i] or 0)
+                if targetVal == 0 then hastTgt = false end
+                tSum = tSum + targetVal
 
                 local buttonY = microY - 34
                 local savePos = vec2(innerX, buttonY)
