@@ -15,7 +15,7 @@ local saveReturnButton = ac.ControlButton('__APP_SECTORSPRACTICE_SAVE')
 local app = {
         title = "Sectors Practice v"..appVersion,
         settings_path = ac.getFolder(ac.FolderID.ACDocuments).."\\apps\\SectorsReturn\\_settings.json",
-        font = ui.DWriteFont("Roboto:/assets/fonts/Roboto-Medium.ttf;Weight=Regular"),
+        font = nil,
         delta = 0,
 	uiDecay = 110, -- Espacio horizontal entre columnas de sectores
 	prevSectorTime = 0,
@@ -69,6 +69,14 @@ local app = {
     sessionBestLapMs = 0,
     lastReturnSector = 1
 }
+
+local UI_STYLE = {
+        fontMain = ui.DWriteFont("Inter:/assets/fonts/Inter-SemiBold.ttf;Weight=SemiBold", 14),
+        fontNumbers = ui.DWriteFont("Inter:/assets/fonts/Inter-Medium.ttf;Weight=Medium", 14),
+        bg = rgbm(0.05, 0.06, 0.08, 0.94)
+}
+
+app.font = UI_STYLE.fontMain
 
 
 --- Obtener puntos de inicio de sectores
@@ -1104,7 +1112,7 @@ function script.main(dt)
 	local title = app.title
 	if app.sNotif ~= "" then title = string.format("%s - %s", title, app.sNotif) end
 	ac.setWindowTitle('sectors', title)
-	ac.setWindowBackground('sectors', app.colors.DARK_GREY)
+	ac.setWindowBackground('sectors', UI_STYLE.bg)
 
 	local lSum, bSum, tSum = 0, 0, 0
 	local hasLast, hastTgt = true, true
