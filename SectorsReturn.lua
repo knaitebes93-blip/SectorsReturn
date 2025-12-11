@@ -718,13 +718,32 @@ local function recordSectorSample(now)
     end
 end
 
-local function startLiveTiming(sectorIndex, now)
+local function resetMicroSectorState(sectorIndex, nowClock)
+        if not sectorIndex then return end
+
+        local clock = nowClock or os.preciseClock()
+        appData.mSectorsCheck.current = 1
+        appData.mSectorsCheck.isValid = true
+        appData.mSectorsCheck.startTime = clock
+
+        if appData.mSectors[sectorIndex] then
+                for j = 1, 8 do
+                        appData.mSectors[sectorIndex][j] = 0
+                end
+        end
+end
+
+local function startLiveTiming(sectorIndex, now, resetMicro)
         if not sectorIndex or CAR.isInPit then return end
 
         local nowClock = now or os.preciseClock()
         app.liveStartClock = nowClock
         app.liveSector = sectorIndex
         app.currentSectorTimer = 0
+
+        if resetMicro then
+                resetMicroSectorState(sectorIndex, nowClock)
+        end
 
         startSectorRecording(sectorIndex)
 
@@ -832,7 +851,7 @@ end
 local MICRO_DELTA_SMALL = 0.10
 local MS_COLOR_BEST = app.colors.PURPLE
 local MS_COLOR_GREEN = app.colors.GREEN
-local MS_COLOR_ORANGE = app.colors.ORANGE
+local MS_COLOR_ORANGE = app.colors.YELLOW
 local MS_COLOR_RED = app.colors.RED
 local MS_COLOR_GRAY = app.colors.MID_GREY
 local MS_COLOR_HIGHLIGHT = app.colors.CYAN
@@ -855,57 +874,85 @@ for j=1, 8 do
 local best = appData.sectorsdata.microBest[i] and appData.sectorsdata.microBest[i][j]
 local last = appData.mSectorsLast[i] and appData.mSectorsLast[i][j]
 local current = appData.mSectors[i][j]
+local isActiveMicro = i == app.currentSector and j == appData.mSectorsCheck.current
 local hasBest = best ~= nil and best > 0
 local hasLast = last ~= nil and last > 0
-local hasCurrent = current ~= nil and current > 0
-local deltaBest = hasBest and hasCurrent and (current - best) or nil
+local hasCurrent = current ~= nil and current > 0 and not isActiveMicro
 local sectorIsInvalid = appData.sectorsValid[i] == false
 
 local baseColor
-if not hasBest or not hasCurrent or sectorIsInvalid then
+if not hasCurrent or sectorIsInvalid then
 baseColor = MS_COLOR_GRAY
-elseif current < best then
+elseif not hasBest then
 baseColor = MS_COLOR_BEST
+else
+if current <= best then
+baseColor = MS_COLOR_BEST
+else
+local deltaBest = current - best
+if deltaBest < MICRO_DELTA_SMALL then
+baseColor = MS_COLOR_ORANGE
 elseif hasLast and current < last then
 baseColor = MS_COLOR_GREEN
-elseif deltaBest ~= nil and deltaBest < MICRO_DELTA_SMALL then
-baseColor = MS_COLOR_ORANGE
 else
 baseColor = MS_COLOR_RED
 end
+end
+end
 x = basex + (j-1)*mSectorWidth
 local lineStart = vec2(x+1, basey)
-local lineEnd = vec2(x+mSectorWidth, basey)
+local lineEnd = vec2(x + mSectorWidth - 1, basey)
 if i == app.currentSector and j == appData.mSectorsCheck.current then
 ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 12)
-end
-ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
+                end
+                ui.drawSimpleLine(lineStart, lineEnd, baseColor, 8)
 
 local hitPos = vec2(x+1, basey - 4)
 ui.setCursor(hitPos)
-if ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(mSectorWidth, 8)) then
-end
+        if ui.invisibleButton(string.format("msec_%d_%d", i, j), vec2(mSectorWidth, 8)) then
+        end
 
-if ui.itemHovered() then
-local currentText = hasCurrent and app.time_to_string(current) or "--.---"
-local bestText = hasBest and app.time_to_string(best) or "--.---"
+        if ui.itemHovered() then
+                local currentText = hasCurrent and app.time_to_string(current) or "--.---"
+                local bestText = hasBest and app.time_to_string(best) or "--.---"
 
-local deltaText = ""
-if hasBest and hasCurrent then
-local delta = current - best
-local sign = delta >= 0 and "+" or ""
-deltaText = string.format("  Δ: %s%.3f", sign, delta)
-end
+                local sumCurrent = 0
+                if appData.mSectors[i] then
+                        for k = 1, 8 do
+                                local v = appData.mSectors[i][k]
+                                if v and v > 0 then sumCurrent = sumCurrent + v end
+                        end
+                end
 
-local tooltip = string.format(
-"Sector S%d micro %d\nActual: %s%s\nBest:   %s",
-i, j,
-currentText,
-deltaText,
-bestText
-)
-ui.setTooltip(tooltip)
-end
+                local sumLast = 0
+                if appData.mSectorsLast[i] then
+                        for k = 1, 8 do
+                                local v = appData.mSectorsLast[i][k]
+                                if v and v > 0 then sumLast = sumLast + v end
+                        end
+                end
+
+                local sumCurrentText = sumCurrent > 0 and app.time_to_string(sumCurrent) or "--.---"
+                local sumLastText = sumLast > 0 and app.time_to_string(sumLast) or "--.---"
+
+                local deltaText = ""
+                if hasBest and hasCurrent then
+                        local delta = current - best
+                        local sign = delta >= 0 and "+" or ""
+                        deltaText = string.format("  Δ: %s%.3f", sign, delta)
+                end
+
+                local tooltip = string.format(
+"Sector S%d micro %d\nActual: %s%s\nBest:   %s\n\nSum curr micros: %s\nSum last micros: %s",
+ i, j,
+ currentText,
+ deltaText,
+ bestText,
+ sumCurrentText,
+ sumLastText
+ )
+                ui.setTooltip(tooltip)
+        end
 end
 
 -- Línea divisoria vertical
@@ -1213,6 +1260,34 @@ local function isOutside()
         end
 end
 
+local function storeMicroTime(sectorIndex, microIndex, duration)
+        if not sectorIndex or not microIndex or not duration then return end
+
+        appData.mSectors[sectorIndex] = appData.mSectors[sectorIndex] or {}
+        appData.mSectorsisBest[sectorIndex] = appData.mSectorsisBest[sectorIndex] or {}
+
+        local bestMicro = appData.sectorsdata.microBest[sectorIndex] and appData.sectorsdata.microBest[sectorIndex][microIndex]
+        if appData.mSectorsCheck.isValid and bestMicro and bestMicro > 0 and duration < bestMicro then
+                appData.mSectorsisBest[sectorIndex][microIndex] = 1
+        else
+                appData.mSectorsisBest[sectorIndex][microIndex] = 0
+        end
+
+        appData.mSectors[sectorIndex][microIndex] = duration
+end
+
+local function finalizeCurrentMicroTime(sectorIndex, nowClock, microIndex)
+        if not sectorIndex then return end
+
+        local prevIndex = microIndex or appData.mSectorsCheck.current
+        if not prevIndex or prevIndex < 1 or prevIndex > 8 then return end
+
+        if not appData.mSectorsCheck.startTime or appData.mSectorsCheck.startTime <= 0 then return end
+
+        local duration = (nowClock or os.preciseClock()) - appData.mSectorsCheck.startTime
+        storeMicroTime(sectorIndex, prevIndex, duration)
+end
+
 local function mSectorsStep(currentSector)
         local splnPos = CAR.splinePosition
         local sectorStartPos = appData.sectors[currentSector]
@@ -1220,17 +1295,16 @@ local function mSectorsStep(currentSector)
         local width = math.abs((sectorEndPos-sectorStartPos)/8)
         for i=0, 7 do
                 if splnPos >= (sectorStartPos + i*width) and splnPos < (sectorStartPos + (i+1)*width) then
-                        if i+1 ~= appData.mSectorsCheck.current then
-                                local t = os.preciseClock() - appData.mSectorsCheck.startTime
-                                local bestMicro = appData.sectorsdata.microBest[currentSector] and appData.sectorsdata.microBest[currentSector][i+1]
-                                if appData.mSectorsCheck.isValid and bestMicro and bestMicro > 0 and t < bestMicro then
-                                        appData.mSectorsisBest[currentSector][i+1] = 1
-                                else
-                                        appData.mSectorsisBest[currentSector][i+1] = 0
+                        local newIndex = i+1
+                        if newIndex ~= appData.mSectorsCheck.current then
+                                local nowClock = os.preciseClock()
+                                local prevIndex = appData.mSectorsCheck.current
+                                if prevIndex >= 1 and prevIndex <= 8 and appData.mSectorsCheck.startTime > 0 then
+                                        local t = nowClock - appData.mSectorsCheck.startTime
+                                        storeMicroTime(currentSector, prevIndex, t)
                                 end
-                                appData.mSectors[currentSector][i+1] = t
-                                appData.mSectorsCheck.startTime = os.preciseClock()
-                                appData.mSectorsCheck.current = i+1
+                                appData.mSectorsCheck.startTime = nowClock
+                                appData.mSectorsCheck.current = newIndex
                                 appData.mSectorsCheck.isValid = true
                         end
                 end
@@ -1261,6 +1335,35 @@ local function checkSectorChangeAndCapture()
     end
 
     app.lastFrameSector = newSector
+end
+
+local function reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
+        if not finishedSector or not sectorTimeSec then return end
+
+        appData.mSectors[finishedSector] = appData.mSectors[finishedSector] or {}
+
+        if not appData.mSectors[finishedSector][8] or appData.mSectors[finishedSector][8] == 0 then
+                local sumFirst7 = 0
+                for j = 1, 7 do
+                        sumFirst7 = sumFirst7 + (appData.mSectors[finishedSector][j] or 0)
+                end
+
+                local lastMicro = sectorTimeSec - sumFirst7
+                if lastMicro < 0 then lastMicro = 0 end
+                appData.mSectors[finishedSector][8] = lastMicro
+        end
+
+        local sumAll = 0
+        for j = 1, 8 do
+                sumAll = sumAll + (appData.mSectors[finishedSector][j] or 0)
+        end
+
+        local delta = sectorTimeSec - sumAll
+        if math.abs(delta) > 0.02 then
+                local adjusted = (appData.mSectors[finishedSector][8] or 0) + delta
+                if adjusted < 0 then adjusted = 0 end
+                appData.mSectors[finishedSector][8] = adjusted
+        end
 end
 
 function script.update(dt)
@@ -1304,8 +1407,6 @@ function script.update(dt)
                 app.teleportCooldownUntil = nil
         end
 
-        local sectorStartedThisFrame = false
-
         -- Capturar estado si cambiamos de sector (deshabilitado por ahora)
         --if not app.teleporting and not SIM.isReplayActive then
         --    checkSectorChangeAndCapture()
@@ -1331,8 +1432,9 @@ function script.update(dt)
                 local lastSector = app.lastFrameSector
                 local currentSector = app.currentSector
                 if lastSector and currentSector and currentSector ~= lastSector then
-                        startLiveTiming(currentSector, now)
-                        sectorStartedThisFrame = true
+                        local prevMicro = appData.mSectorsCheck.current
+                        finalizeCurrentMicroTime(lastSector, now, prevMicro)
+                        startLiveTiming(currentSector, now, true)
                 end
         end
 
@@ -1361,12 +1463,6 @@ function script.update(dt)
         -- Actualización de tiempos de sector y best (basado en app original),
         -- ignorando cambios provocados por teleports
         if not teleportActive and not inPit and app.prevSectorTime ~= CAR.previousSectorTime then
-                local targetSector = app.getCurrentSector()
-                if not sectorStartedThisFrame then
-                        targetSector = targetSector or (((CAR.currentSector + 1) <= appData.sector_count) and (CAR.currentSector + 1) or 1)
-                        startLiveTiming(targetSector, now)
-                        sectorStartedThisFrame = true
-                end
                 -- AC referencia splits desde 0, tablas Lua desde 1
                 app.prevSectorTime = CAR.lastSplits[appData.sector_count-1] or CAR.previousSectorTime
                 if appData.sectorsdata.best[CAR.currentSector+1] == nil then
@@ -1381,7 +1477,11 @@ function script.update(dt)
                                 appData.current_sectors[appData.sector_count] = app.prevSectorTime
                         end
                         if app.currentSectorValid then
-                                copyCurrentMicroToLast(appData.sector_count)
+                                local finishedSector = appData.sector_count
+                                local sectorTimeSec = app.prevSectorTime
+                                reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
+
+                                copyCurrentMicroToLast(finishedSector)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
                                         or appData.sectorsdata.best[appData.sector_count] == 0 then
                                         app.sNotif = "S" .. appData.sector_count .. " " ..
@@ -1399,7 +1499,11 @@ function script.update(dt)
                         app.prevSectorTime = CAR.previousSectorTime / 1000
                         appData.current_sectors[CAR.currentSector] = app.prevSectorTime
                         if app.currentSectorValid then
-                                copyCurrentMicroToLast(CAR.currentSector)
+                                local finishedSector = CAR.currentSector
+                                local sectorTimeSec = app.prevSectorTime
+                                reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
+
+                                copyCurrentMicroToLast(finishedSector)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
                                         or appData.sectorsdata.best[CAR.currentSector] == 0 then
                                         app.sNotif = "S" .. CAR.currentSector .. " " ..
