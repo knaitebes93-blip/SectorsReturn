@@ -130,6 +130,40 @@ local function copyCurrentMicroToLast(sectorIndex)
         end
 end
 
+local function reconcileSectorMicros(sectorIndex, sectorTimeSec)
+        if not sectorIndex or not sectorTimeSec or sectorTimeSec <= 0 then return end
+
+        appData.mSectors[sectorIndex] = appData.mSectors[sectorIndex] or {}
+
+        for j = 1, 8 do
+                local v = appData.mSectors[sectorIndex][j]
+                appData.mSectors[sectorIndex][j] = v or 0
+        end
+
+        local sumFirst7 = 0
+        for j = 1, 7 do
+                sumFirst7 = sumFirst7 + (appData.mSectors[sectorIndex][j] or 0)
+        end
+
+        if not appData.mSectors[sectorIndex][8] or appData.mSectors[sectorIndex][8] <= 0 then
+                local lastMicro = sectorTimeSec - sumFirst7
+                if lastMicro < 0 then lastMicro = 0 end
+                appData.mSectors[sectorIndex][8] = lastMicro
+        end
+
+        local sumAll = 0
+        for j = 1, 8 do
+                sumAll = sumAll + (appData.mSectors[sectorIndex][j] or 0)
+        end
+
+        local delta = sectorTimeSec - sumAll
+        if math.abs(delta) > 0.02 then
+                local adjusted = (appData.mSectors[sectorIndex][8] or 0) + delta
+                if adjusted < 0 then adjusted = 0 end
+                appData.mSectors[sectorIndex][8] = adjusted
+        end
+end
+
 --- Obtener sector actual basado en posición spline
 app.getCurrentSector = function()
         for i=1, appData.sector_count do
@@ -1337,35 +1371,6 @@ local function checkSectorChangeAndCapture()
     app.lastFrameSector = newSector
 end
 
-local function reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
-        if not finishedSector or not sectorTimeSec then return end
-
-        appData.mSectors[finishedSector] = appData.mSectors[finishedSector] or {}
-
-        if not appData.mSectors[finishedSector][8] or appData.mSectors[finishedSector][8] == 0 then
-                local sumFirst7 = 0
-                for j = 1, 7 do
-                        sumFirst7 = sumFirst7 + (appData.mSectors[finishedSector][j] or 0)
-                end
-
-                local lastMicro = sectorTimeSec - sumFirst7
-                if lastMicro < 0 then lastMicro = 0 end
-                appData.mSectors[finishedSector][8] = lastMicro
-        end
-
-        local sumAll = 0
-        for j = 1, 8 do
-                sumAll = sumAll + (appData.mSectors[finishedSector][j] or 0)
-        end
-
-        local delta = sectorTimeSec - sumAll
-        if math.abs(delta) > 0.02 then
-                local adjusted = (appData.mSectors[finishedSector][8] or 0) + delta
-                if adjusted < 0 then adjusted = 0 end
-                appData.mSectors[finishedSector][8] = adjusted
-        end
-end
-
 function script.update(dt)
         isOutside()
         app.currentSector = app.getCurrentSector()
@@ -1476,12 +1481,11 @@ function script.update(dt)
                         if app.prevSectorTime ~= appData.current_sectors[appData.sector_count] then
                                 appData.current_sectors[appData.sector_count] = app.prevSectorTime
                         end
+                        local finishedSector = appData.sector_count
+                        local sectorTimeSec = app.prevSectorTime
+                        reconcileSectorMicros(finishedSector, sectorTimeSec)
+                        copyCurrentMicroToLast(finishedSector)
                         if app.currentSectorValid then
-                                local finishedSector = appData.sector_count
-                                local sectorTimeSec = app.prevSectorTime
-                                reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
-
-                                copyCurrentMicroToLast(finishedSector)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
                                         or appData.sectorsdata.best[appData.sector_count] == 0 then
                                         app.sNotif = "S" .. appData.sector_count .. " " ..
@@ -1498,12 +1502,11 @@ function script.update(dt)
                 else
                         app.prevSectorTime = CAR.previousSectorTime / 1000
                         appData.current_sectors[CAR.currentSector] = app.prevSectorTime
+                        local finishedSector = CAR.currentSector
+                        local sectorTimeSec = app.prevSectorTime
+                        reconcileSectorMicros(finishedSector, sectorTimeSec)
+                        copyCurrentMicroToLast(finishedSector)
                         if app.currentSectorValid then
-                                local finishedSector = CAR.currentSector
-                                local sectorTimeSec = app.prevSectorTime
-                                reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
-
-                                copyCurrentMicroToLast(finishedSector)
                                 if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
                                         or appData.sectorsdata.best[CAR.currentSector] == 0 then
                                         app.sNotif = "S" .. CAR.currentSector .. " " ..
@@ -1518,16 +1521,17 @@ function script.update(dt)
                                 end
                         end
                 end
+        end
 
-		-- Personal best de vuelta (record tipo CM)
-		if CAR.isLastLapValid and CAR.previousLapTimeMs ~= 0 then
-			if appData.pb and CAR.previousLapTimeMs < appData.pb then
-				appData.pb = CAR.previousLapTimeMs
-				if app.userData.settings.savepb then
-					app.savePersonalBest(CAR.previousLapTimeMs)
-				end
-			end
-		end
+        -- Personal best de vuelta (record tipo CM)
+        if CAR.isLastLapValid and CAR.previousLapTimeMs ~= 0 then
+                if appData.pb and CAR.previousLapTimeMs < appData.pb then
+                        appData.pb = CAR.previousLapTimeMs
+                        if app.userData.settings.savepb then
+                                app.savePersonalBest(CAR.previousLapTimeMs)
+                        end
+                end
+        end
 
         -- Last y Best de sesión, independientes del teletransporte
         if CAR.previousLapTimeMs > 0 and CAR.previousLapTimeMs ~= app.sessionLastLapMs then
@@ -1537,9 +1541,9 @@ function script.update(dt)
             end
         end
 
-                app.prevSectorTime = CAR.previousSectorTime
-                app.currentSectorValid = true
-        end
+        app.prevSectorTime = CAR.previousSectorTime
+        app.currentSectorValid = true
+end
 end
 
 render.on('main.track.transparent', function ()
