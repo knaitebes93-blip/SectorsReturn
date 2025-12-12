@@ -860,22 +860,18 @@ local MS_COLOR_HIGHLIGHT = app.colors.CYAN
 
 --- Dibuja las barras de micro-sectores y AHORA TAMBIÉN LOS BOTONES
 local function drawmSectors(dt)
-local mSectorsCount = 8
-local mSectorGap = 2
-local sectorInnerMargin = 2
+local mSectorWidth = app.uiDecay / 8
 
 local basey = 104
-local baseBasex = 35
+local basex = 35
 
 -- Línea gris superior
-ui.drawSimpleLine(vec2(baseBasex, basey-9), vec2(baseBasex, basey+9), app.colors.GREY, 1)
+ui.drawSimpleLine(vec2(basex, basey-9), vec2(basex, basey+9), app.colors.GREY, 1)
 
 local x
 for i=1, appData.sector_count do
-local basex = app.uiDecay * (i-1) + baseBasex
-local sectorInnerWidth = app.uiDecay - sectorInnerMargin * 2
-local mSectorWidth = (sectorInnerWidth - mSectorGap * (mSectorsCount - 1)) / mSectorsCount
-local firstMicroX = basex + sectorInnerMargin															
+basex = app.uiDecay * (i-1) + 35
+																		
 ui.pushID(i)
 -- Dibujar barras de microsectores
 for j=1, 8 do
@@ -907,9 +903,9 @@ baseColor = MS_COLOR_RED
 end
 end
 end
-x = firstMicroX + (j-1) * (mSectorWidth + mSectorGap)
-local lineStart = vec2(x, basey)
-local lineEnd = vec2(x + mSectorWidth, basey)
+x = basex + (j-1)*mSectorWidth
+local lineStart = vec2(x+1, basey)
+local lineEnd = vec2(x + mSectorWidth - 1, basey)
 if i == app.currentSector and j == appData.mSectorsCheck.current then
 ui.drawSimpleLine(vec2(lineStart.x-1, lineStart.y), vec2(lineEnd.x+1, lineEnd.y), MS_COLOR_HIGHLIGHT, 12)
                 end
