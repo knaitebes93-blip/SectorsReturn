@@ -100,7 +100,9 @@ local appData = {
                 microBest = {},
         },
         mSectorsLast = {},
-        pb = false
+        pb = false,
+        lastBestDelta = {},
+        lastWasNewBest = {}
 }
 
 --- Inicializar micro sectores
@@ -278,6 +280,8 @@ app.init = function()
                 appData.sectorsdata.microBest[i] = appData.sectorsdata.microBest[i] or {}
                 appData.mSectorsLast[i] = appData.mSectorsLast[i] or {}
                 appData.sectorsValid[i] = true
+                appData.lastBestDelta[i] = appData.lastBestDelta[i]
+                appData.lastWasNewBest[i] = appData.lastWasNewBest[i] or false
         end
     app.loadPersonalBest()
     app.set_microSectors()
@@ -1150,8 +1154,8 @@ function script.main(dt)
         ui.offsetCursorX(-10)
         ui.offsetCursorY(-3)
         ui.dwriteText("Last", tSize)
-	for i=1, appData.sector_count do
-		ui.sameLine(i*app.uiDecay - 70, 0)
+        for i=1, appData.sector_count do
+                ui.sameLine(i*app.uiDecay - 70, 0)
                 local lastTime = appData.current_sectors[i]
                 local lastStr = app.time_to_string(lastTime)
                 if lastTime > 0 and appData.sectorsValid[i] == false then
@@ -1163,17 +1167,27 @@ function script.main(dt)
                         ui.dwriteText(lastStr, tSize)
                 end
 
-                color = app.colors.GREY
-                if appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 or appData.sectorsdata.best[i] == nil or appData.sectorsdata.best[i] == 0 then
-                        app.delta = 'inv'
+                local color = app.colors.GREY
+                local deltaText = app.delta or 'inv'
+                if appData.lastWasNewBest[i] then
+                        local deltaVsOld = appData.lastBestDelta and appData.lastBestDelta[i]
+                        if deltaVsOld ~= nil then
+                                color = deltaVsOld <= 0 and app.colors.GREEN or app.colors.RED
+                                deltaText = string.format("%+.3fs", deltaVsOld)
+                        else
+                                deltaText = "PB"
+                                color = app.colors.PURPLE
+                        end
+                elseif appData.current_sectors[i] == nil or appData.current_sectors[i] == 0 or appData.sectorsdata.best[i] == nil or appData.sectorsdata.best[i] == 0 then
+                        deltaText = 'inv'
                         hasLast = false
                 else
                         app.delta = appData.current_sectors[i] - appData.sectorsdata.best[i]
                         color = app.delta <= 0 and app.colors.GREEN or app.colors.RED
-                        app.delta = string.format("%+.3fs", app.delta)
+                        deltaText = string.format("%+.3fs", app.delta)
                 end
                 ui.sameLine(i*app.uiDecay - 17, 0)
-                ui.dwriteText(app.delta, tSize-1, color)
+                ui.dwriteText(deltaText, tSize-1, color)
                 lSum = lSum + appData.current_sectors[i]
         end
 
@@ -1615,14 +1629,21 @@ function script.update(dt)
                         if app.prevSectorTime ~= appData.current_sectors[appData.sector_count] then
                                 appData.current_sectors[appData.sector_count] = app.prevSectorTime
                         end
+                        appData.lastWasNewBest[appData.sector_count] = false
+                        appData.lastBestDelta[appData.sector_count] = nil
                         if app.currentSectorValid then
                                 local finishedSector = appData.sector_count
                                 local sectorTimeSec = app.prevSectorTime
                                 reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
 
                                 copyCurrentMicroToLast(finishedSector)
-                                if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[appData.sector_count]
-                                        or appData.sectorsdata.best[appData.sector_count] == 0 then
+                                local currentBest = appData.sectorsdata.best[appData.sector_count]
+                                if app.prevSectorTime ~= 0 and app.prevSectorTime < currentBest
+                                        or currentBest == 0 then
+                                        local oldBest = currentBest
+                                        local deltaVsOldBest = (oldBest and oldBest > 0) and (app.prevSectorTime - oldBest) or nil
+                                        appData.lastBestDelta[appData.sector_count] = deltaVsOldBest
+                                        appData.lastWasNewBest[appData.sector_count] = true
                                         app.sNotif = "S" .. appData.sector_count .. " " ..
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[appData.sector_count])
                                         appData.sectorsdata.best[appData.sector_count] = app.prevSectorTime
@@ -1637,14 +1658,21 @@ function script.update(dt)
                 else
                         app.prevSectorTime = CAR.previousSectorTime / 1000
                         appData.current_sectors[CAR.currentSector] = app.prevSectorTime
+                        appData.lastWasNewBest[CAR.currentSector] = false
+                        appData.lastBestDelta[CAR.currentSector] = nil
                         if app.currentSectorValid then
                                 local finishedSector = CAR.currentSector
                                 local sectorTimeSec = app.prevSectorTime
                                 reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
 
                                 copyCurrentMicroToLast(finishedSector)
-                                if app.prevSectorTime ~= 0 and app.prevSectorTime < appData.sectorsdata.best[CAR.currentSector]
-                                        or appData.sectorsdata.best[CAR.currentSector] == 0 then
+                                local currentBest = appData.sectorsdata.best[CAR.currentSector]
+                                if app.prevSectorTime ~= 0 and app.prevSectorTime < currentBest
+                                        or currentBest == 0 then
+                                        local oldBest = currentBest
+                                        local deltaVsOldBest = (oldBest and oldBest > 0) and (app.prevSectorTime - oldBest) or nil
+                                        appData.lastBestDelta[CAR.currentSector] = deltaVsOldBest
+                                        appData.lastWasNewBest[CAR.currentSector] = true
                                         app.sNotif = "S" .. CAR.currentSector .. " " ..
                                                 string.format("%.3fs", app.prevSectorTime - appData.sectorsdata.best[CAR.currentSector])
                                         appData.sectorsdata.best[CAR.currentSector] = app.prevSectorTime
