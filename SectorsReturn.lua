@@ -72,6 +72,7 @@ local app = {
 
 
 local DEBUG_MICRO_RECONCILE = false
+local DEBUG_MICRO_TIMING = false
 
 
 --- Obtener puntos de inicio de sectores
@@ -121,7 +122,9 @@ app.set_microSectors = function()
         appData.mSectorsCheck = {
                 current = 1,
                 isValid = true,
-                startTime = (CAR.lapTimeMs or 0) / 1000
+                startTime = (CAR.lapTimeMs or 0) / 1000,
+                prevProgress = nil,
+                prevLapTimeSec = nil
         }
 end
 
@@ -728,6 +731,8 @@ local function resetMicroSectorState(sectorIndex, lapTimeSec)
         appData.mSectorsCheck.current = 1
         appData.mSectorsCheck.isValid = true
         appData.mSectorsCheck.startTime = clock
+        appData.mSectorsCheck.prevProgress = nil
+        appData.mSectorsCheck.prevLapTimeSec = nil
 
         if appData.mSectors[sectorIndex] then
                 for j = 1, 8 do
@@ -1296,6 +1301,39 @@ local function finalizeCurrentMicroTime(sectorIndex, nowLapTimeSec, microIndex)
         storeMicroTime(sectorIndex, prevIndex, duration)
 end
 
+local function getAdjustedProgresses(prevProgress, currProgress, boundaryProgress)
+        local adjustedPrev = prevProgress
+        local adjustedCurr = currProgress
+        local adjustedBoundary = boundaryProgress
+
+        if adjustedCurr < adjustedPrev then
+                adjustedCurr = adjustedCurr + 1
+                if adjustedBoundary < adjustedPrev then
+                        adjustedBoundary = adjustedBoundary + 1
+                end
+        end
+
+        return adjustedPrev, adjustedCurr, adjustedBoundary
+end
+
+local function computeCrossingTime(boundaryProgress, prevProgress, currProgress, prevLapTimeSec, currLapTimeSec)
+        if prevProgress == nil or prevLapTimeSec == nil then
+                return currLapTimeSec, 0
+        end
+
+        local adjustedPrev, adjustedCurr, adjustedBoundary = getAdjustedProgresses(prevProgress, currProgress, boundaryProgress)
+        local deltaProgress = adjustedCurr - adjustedPrev
+        if deltaProgress <= 0 then
+                return currLapTimeSec, 0
+        end
+
+        local t = (adjustedBoundary - adjustedPrev) / deltaProgress
+        if t < 0 then t = 0 elseif t > 1 then t = 1 end
+
+        local crossingTimeSec = prevLapTimeSec + t * (currLapTimeSec - prevLapTimeSec)
+        return crossingTimeSec, t
+end
+
 local function mSectorsStep(currentSector)
         local splnPos = CAR.splinePosition
         local sectorStartPos = appData.sectors[currentSector]
@@ -1306,22 +1344,55 @@ local function mSectorsStep(currentSector)
         if currentSector == 1 and (appData.mSectorsCheck.startTime == nil or nowLapTimeSec < appData.mSectorsCheck.startTime) then
                 resetMicroSectorState(currentSector, nowLapTimeSec)
         end
-        for i=0, 7 do
-                if splnPos >= (sectorStartPos + i*width) and splnPos < (sectorStartPos + (i+1)*width) then
-                        local newIndex = i+1
-                        if newIndex ~= appData.mSectorsCheck.current then
-                                local prevIndex = appData.mSectorsCheck.current
-                                if prevIndex >= 1 and prevIndex <= 8 and appData.mSectorsCheck.startTime ~= nil then
-                                        local t = nowLapTimeSec - appData.mSectorsCheck.startTime
-                                        if t < 0 then t = 0 end
-                                        storeMicroTime(currentSector, prevIndex, t)
-                                end
-                                appData.mSectorsCheck.startTime = nowLapTimeSec
-                                appData.mSectorsCheck.current = newIndex
-                                appData.mSectorsCheck.isValid = true
+
+        if appData.mSectorsCheck.prevProgress == nil or appData.mSectorsCheck.prevLapTimeSec == nil then
+                appData.mSectorsCheck.prevProgress = splnPos
+                appData.mSectorsCheck.prevLapTimeSec = nowLapTimeSec
+                return
+        end
+
+        local prevProgress = appData.mSectorsCheck.prevProgress
+        local prevLapTimeSec = appData.mSectorsCheck.prevLapTimeSec
+        local currProgress = splnPos
+
+        for boundaryIndex = appData.mSectorsCheck.current, 7 do
+                local boundaryProgress = sectorStartPos + boundaryIndex * width
+                local adjustedPrev, adjustedCurr, adjustedBoundary = getAdjustedProgresses(prevProgress, currProgress, boundaryProgress)
+                if adjustedPrev < adjustedBoundary and adjustedCurr >= adjustedBoundary then
+                        local crossingTimeSec, t = computeCrossingTime(boundaryProgress, prevProgress, currProgress, prevLapTimeSec, nowLapTimeSec)
+                        local startTime = appData.mSectorsCheck.startTime or prevLapTimeSec
+                        local duration = crossingTimeSec - startTime
+                        if duration < 0 then duration = 0 end
+
+                        storeMicroTime(currentSector, boundaryIndex, duration)
+                        if DEBUG_MICRO_TIMING then
+                                ac.log(string.format(
+                                        "[micro timing] S%d micro%d boundary=%.6f prev=%.6f curr=%.6f t=%.6f cross=%.6f dur=%.6f",
+                                        currentSector,
+                                        boundaryIndex,
+                                        boundaryProgress,
+                                        prevProgress,
+                                        currProgress,
+                                        t,
+                                        crossingTimeSec,
+                                        duration
+                                ))
+                        end
+
+                        appData.mSectorsCheck.startTime = crossingTimeSec
+                        appData.mSectorsCheck.current = boundaryIndex + 1
+                        appData.mSectorsCheck.isValid = true
+                        prevProgress = adjustedBoundary
+                        prevLapTimeSec = crossingTimeSec
+                else
+                        if adjustedCurr < adjustedBoundary then
+                                break
                         end
                 end
         end
+
+        appData.mSectorsCheck.prevProgress = splnPos
+        appData.mSectorsCheck.prevLapTimeSec = nowLapTimeSec
 end
 
 -- ================= LOGICA DE CAPTURA DE ESTADO =================
@@ -1476,12 +1547,33 @@ function script.update(dt)
                 local currentSector = app.currentSector
                 if lastSector and currentSector and currentSector ~= lastSector then
                         local prevMicro = appData.mSectorsCheck.current
+                        local sectorEndPos = lastSector < appData.sector_count and appData.sectors[lastSector + 1] or 1
                         local sectorEndTimeSec = lapTimeSec
                         if lastSector == appData.sector_count and currentSector == 1 and prevLapTimeSec > 0 then
                                 sectorEndTimeSec = prevLapTimeSec
                         end
-                        finalizeCurrentMicroTime(lastSector, sectorEndTimeSec, prevMicro)
+                        local interpolatedEndTimeSec, t = computeCrossingTime(
+                                sectorEndPos,
+                                appData.mSectorsCheck.prevProgress,
+                                CAR.splinePosition,
+                                appData.mSectorsCheck.prevLapTimeSec,
+                                sectorEndTimeSec
+                        )
+                        finalizeCurrentMicroTime(lastSector, interpolatedEndTimeSec, prevMicro)
+                        if DEBUG_MICRO_TIMING then
+                                ac.log(string.format(
+                                        "[micro timing] S%d->S%d boundary=%.6f prev=%.6f curr=%.6f t=%.6f cross=%.6f",
+                                        lastSector,
+                                        currentSector,
+                                        sectorEndPos,
+                                        appData.mSectorsCheck.prevProgress or -1,
+                                        CAR.splinePosition,
+                                        t,
+                                        interpolatedEndTimeSec
+                                ))
+                        end
                         startLiveTiming(currentSector, now, true)
+                        appData.mSectorsCheck.startTime = interpolatedEndTimeSec
                 end
         end
 
