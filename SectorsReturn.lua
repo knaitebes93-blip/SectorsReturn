@@ -71,6 +71,9 @@ local app = {
 }
 
 
+local DEBUG_MICRO_RECONCILE = false
+
+
 --- Obtener puntos de inicio de sectores
 app.getTrackSectors = function()
 	local splits = SIM.lapSplits
@@ -833,9 +836,7 @@ app.teleportToSector = function(sectorIndex, stateData)
         -- Reiniciar lógica del sector para practicar
         appData.sectorsValid[sectorIndex] = true
         app.currentSector = sectorIndex
-        appData.mSectorsCheck.isValid = true
-        appData.mSectorsCheck.current = 1
-        appData.mSectorsCheck.startTime = (CAR.lapTimeMs or 0) / 1000
+        resetMicroSectorState(sectorIndex, (CAR.lapTimeMs or 0) / 1000)
 
         ac.setMessage("Modo Práctica", "Sector " .. sectorIndex .. " Reiniciado")
         app.teleporting = true
@@ -1353,28 +1354,56 @@ local function reconcileFinishedSectorMicros(finishedSector, sectorTimeSec)
         if not finishedSector or not sectorTimeSec then return end
 
         appData.mSectors[finishedSector] = appData.mSectors[finishedSector] or {}
+        local micros = appData.mSectors[finishedSector]
 
-        if not appData.mSectors[finishedSector][8] or appData.mSectors[finishedSector][8] == 0 then
-                local sumFirst7 = 0
+        for j = 1, 8 do
+                micros[j] = micros[j] or 0
+        end
+
+        local sumFirst7 = 0
+        for j = 1, 7 do
+                sumFirst7 = sumFirst7 + micros[j]
+        end
+
+        if sumFirst7 > sectorTimeSec then
+                local factor = sectorTimeSec > 0 and (sectorTimeSec / sumFirst7) or 0
                 for j = 1, 7 do
-                        sumFirst7 = sumFirst7 + (appData.mSectors[finishedSector][j] or 0)
+                        micros[j] = math.max(micros[j] * factor, 0)
                 end
 
-                local lastMicro = sectorTimeSec - sumFirst7
-                if lastMicro < 0 then lastMicro = 0 end
-                appData.mSectors[finishedSector][8] = lastMicro
+                sumFirst7 = 0
+                for j = 1, 7 do
+                        sumFirst7 = sumFirst7 + micros[j]
+                end
         end
 
-        local sumAll = 0
-        for j = 1, 8 do
-                sumAll = sumAll + (appData.mSectors[finishedSector][j] or 0)
+        local lastMicro = sectorTimeSec - sumFirst7
+        if lastMicro < 0 then lastMicro = 0 end
+        micros[8] = lastMicro
+
+        local totalSum = sumFirst7 + lastMicro
+        local diff = sectorTimeSec - totalSum
+
+        if math.abs(diff) > 0.001 then
+                local adjusted = micros[8] + diff
+                micros[8] = math.max(adjusted, 0)
+                totalSum = 0
+                for j = 1, 8 do
+                        totalSum = totalSum + micros[j]
+                end
+                diff = sectorTimeSec - totalSum
         end
 
-        local delta = sectorTimeSec - sumAll
-        if math.abs(delta) > 0.01 then
-                local adjusted = (appData.mSectors[finishedSector][8] or 0) + delta
-                if adjusted < 0 then adjusted = 0 end
-                appData.mSectors[finishedSector][8] = adjusted
+        if DEBUG_MICRO_RECONCILE then
+                ac.log(string.format(
+                        "[micro reconcile] S%d sectorTime=%.6f sumFirst7=%.6f micro8=%.6f total=%.6f diff=%.6f",
+                        finishedSector,
+                        sectorTimeSec,
+                        sumFirst7,
+                        micros[8],
+                        totalSum,
+                        diff
+                ))
         end
 end
 
